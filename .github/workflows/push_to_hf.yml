@@ -13,10 +13,16 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - name: Install Git LFS
+      - name: Install Git tools
         run: |
           sudo apt-get update && sudo apt-get install -y git-lfs
           git lfs install
+          pip install git-filter-repo
+
+      - name: Cleanup zip files from history
+        run: |
+          # Xóa tất cả file zip ra khỏi lịch sử Git
+          git filter-repo --path-glob "*.zip" --invert-paths || true
 
       - name: Push to Hugging Face Hub
         env:
@@ -27,5 +33,5 @@ jobs:
           git remote remove space || true
           git remote add space https://thaiquangvinh:$HF_TOKEN@huggingface.co/spaces/thaiquangvinh/aichatvn
           
-          # Ghi đè toàn bộ repo ở Hugging Face
+          # Force push repo sạch sang Hugging Face
           git push space main --force
