@@ -1,0 +1,31 @@
+name: Sync to Hugging Face Hub
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install Git LFS
+        run: |
+          sudo apt-get update && sudo apt-get install -y git-lfs
+          git lfs install
+
+      - name: Push to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+          git remote remove space || true
+          git remote add space https://Anothervin1:$HF_TOKEN@huggingface.co/spaces/Anothervin1/App3
+          
+          # Ghi đè toàn bộ repo ở Hugging Face
+          git push space main --force
