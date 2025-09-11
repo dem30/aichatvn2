@@ -25,7 +25,7 @@ jobs:
           git config --global user.email "github-actions@users.noreply.github.com"
           git config --global user.name "GitHub Actions"
           git remote remove space || true
-          git remote add space https://Anothervin1:$HF_TOKEN@huggingface.co/spaces/Anothervin1/App3
+          git remote add space https://thaiquangvinh:$HF_TOKEN@huggingface.co/spaces/thaiquangvinh/aichatvn
           
           # Ghi đè toàn bộ repo ở Hugging Face
           git push space main --force
