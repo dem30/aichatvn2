@@ -1,0 +1,44 @@
+name: Sync requirements.txt to Hugging Face Hub
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Git LFS
+        run: |
+          sudo apt-get update && sudo apt-get install -y git-lfs
+          git lfs install
+
+      - name: Push only requirements.txt to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+
+          # Clone repo Hugging Face
+          git clone https://Anothervin1:$HF_TOKEN@huggingface.co/spaces/Anothervin1/App3 space_repo
+
+          # Copy requirements.txt sang Space
+          cp requirements.txt space_repo/requirements.txt
+
+          cd space_repo
+          git add requirements.txt
+          git commit -m "Update requirements.txt" || echo "No changes to commit"
+          git push origin main
+
+      - name: Force Restart Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          curl -X POST -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/api/spaces/Anothervin1/App3/restart?force=true"
