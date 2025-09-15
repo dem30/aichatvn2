@@ -21,7 +21,6 @@ logger = get_logger("TabChat")
 CHAT_HISTORY_LIMIT = getattr(Config, "CHAT_HISTORY_LIMIT", 50)
 messages_lock = asyncio.Lock()
 
-
 async def create_tab(core: Core) -> Tuple[Callable, Callable]:
     groq_client = AsyncGroq(api_key=Config.GROQ_API_KEY)
 
@@ -55,7 +54,6 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
             ui.notify("Lỗi: Phiên đăng nhập không hợp lệ", type="negative")
             return
 
-        # Thiết lập model và mode mặc định từ Config
         if "model" not in client_state:
             client_state["model"] = Config.DEFAULT_MODEL
         if "chat_mode" not in client_state:
@@ -64,17 +62,18 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
         client_storage = app.storage.client.setdefault(client_id, {})
         chat_component = client_storage.get("chat_component")
         if chat_component is None or not getattr(chat_component, "rendered", False):
-            async def on_send(message: str):
+            async def on_send(message: str, file=None):
                 client_id = context.client.id
                 client_storage = app.storage.client.get(client_id, {})
                 chat_component = client_storage.get("chat_component")
                 _username = client_state.get("username", "")
-                logger.debug(f"{_username}: >>> on_send triggered với message='{message}', client_id={client_id}")
+                logger.debug(f"{_username}: >>> on_send triggered với message='{message}', file={file}, client_id={client_id}")
                 if not chat_component or not chat_component.rendered or not chat_component.message_input or not chat_component.messages_container:
                     logger.error(f"{_username}: ChatComponent chưa sẵn sàng, client_id={client_id}")
                     ui.notify("Giao diện chat chưa sẵn sàng, vui lòng thử lại!", type="negative")
                     return
                 chat_component.message_input.value = message
+                chat_component.uploaded_file = file
                 await chat_component.handle_send()
 
             async def on_reset():
