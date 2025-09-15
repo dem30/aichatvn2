@@ -1,16 +1,35 @@
 import asyncio
 import os
-import logging  # Import để fallback temp logger
+import logging
 from fastapi import FastAPI
 from nicegui import ui, app
 from app import fastapi_app, core
 from config import Config
 from contextlib import asynccontextmanager
-from pathlib import Path
 from utils.logging import get_logger, setup_logging, disable_verbose_logs
 from utils.core_common import check_disk_space
 
-# Đặt STORAGE_PATH ngay khi import (giữ nguyên)
+# Kiểm tra và tạo thư mục CHAT_FILE_STORAGE_PATH
+try:
+    os.makedirs(Config.CHAT_FILE_STORAGE_PATH, exist_ok=True)
+    if not os.access(Config.CHAT_FILE_STORAGE_PATH, os.W_OK):
+        raise PermissionError(f"Không có quyền ghi vào {Config.CHAT_FILE_STORAGE_PATH}")
+    app.add_static_files("/files", Config.CHAT_FILE_STORAGE_PATH)  # Sửa: dùng app thay vì ui
+except Exception as e:
+    print(f"Lỗi khi thiết lập CHAT_FILE_STORAGE_PATH: {str(e)}")
+    raise
+
+# Kiểm tra và tạo thư mục AVATAR_STORAGE_PATH
+try:
+    os.makedirs(Config.AVATAR_STORAGE_PATH, exist_ok=True)
+    if not os.access(Config.AVATAR_STORAGE_PATH, os.W_OK):
+        raise PermissionError(f"Không có quyền ghi vào {Config.AVATAR_STORAGE_PATH}")
+    app.add_static_files("/avatars", Config.AVATAR_STORAGE_PATH)  # Sửa: dùng app thay vì ui
+except Exception as e:
+    print(f"Lỗi khi thiết lập AVATAR_STORAGE_PATH: {str(e)}")
+    raise
+
+# Đặt STORAGE_PATH
 try:
     storage_path = "/tmp/nicegui"
     os.makedirs(storage_path, exist_ok=True)
@@ -18,27 +37,23 @@ try:
         raise PermissionError(f"Không có quyền ghi vào {storage_path}")
     app.storage.STORAGE_PATH = storage_path
 except Exception as e:
-    # Fallback print nếu logger chưa sẵn sàng
     print(f"Lỗi khi thiết lập STORAGE_PATH: {str(e)}")
     raise
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger = None  # Khởi tạo sau setup_logging
+    logger = None
     try:
-        # Setup logging đầu tiên (INFO mặc định, chỉ stdout)
         setup_logging()
         disable_verbose_logs()
         logger = get_logger("Main")
         logger.info("Bắt đầu lifespan: Setup logging hoàn tất")
 
-        # Tắt HTTP access logs từ uvicorn/FastAPI (giảm log static files)
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
         logging.getLogger("uvicorn").setLevel(logging.WARNING)
         logging.getLogger("fastapi").setLevel(logging.WARNING)
         logger.info("Đã tắt HTTP access logs từ uvicorn/FastAPI")
 
-        # Kiểm tra cấu hình
         if not hasattr(Config, "SQLITE_DB_PATH") or not Config.SQLITE_DB_PATH:
             logger.error("Thiếu cấu hình SQLITE_DB_PATH")
             raise ValueError("Thiếu cấu hình SQLITE_DB_PATH")
@@ -47,7 +62,7 @@ async def lifespan(app: FastAPI):
         check_disk_space()
 
         logger.info("Bắt đầu khởi tạo ứng dụng")
-        await core.init_sqlite()  # Cleanup sync_log sẽ chạy ở đây (sau CREATE TABLE)
+        await core.init_sqlite()
         if core.firestore_available:
             logger.info("Firestore khả dụng, kiểm tra quyền admin")
             if await core.sqlite_handler.has_permission("admin", "sync_data"):
@@ -68,7 +83,7 @@ async def lifespan(app: FastAPI):
         if logger:
             logger.error(f"Lỗi trong lifespan: {str(e)}", exc_info=True)
         else:
-            print(f"Lỗi lifespan (logger chưa sẵn sàng): {str(e)}")  # Fallback print
+            print(f"Lỗi lifespan (logger chưa sẵn sàng): {str(e)}")
         raise
     finally:
         if logger:
@@ -76,7 +91,6 @@ async def lifespan(app: FastAPI):
 
 fastapi_app.router.lifespan_context = lifespan
 
-# Kiểm tra dung lượng /tmp (sau lifespan, dùng logger đã sẵn sàng)
 try:
     check_disk_space()
 except ValueError as e:
@@ -84,7 +98,6 @@ except ValueError as e:
     logger.warning(f"Dung lượng /tmp thấp: {str(e)}")
     ui.notify(f"Dung lượng /tmp thấp: {str(e)}", type="warning")
 
-# Chạy app (bỏ timer, vì cleanup trong init_sqlite)
 ui.run_with(
     fastapi_app,
     title=Config.APP_NAME,

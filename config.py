@@ -5,19 +5,24 @@ class Config:
 
     # Thông tin ứng dụng
     APP_NAME = "SuperApp"
-    
     APP_VERSION = "1.0.0"
     PORT = int(os.environ.get("PORT", 7860))
+
+    # Cấu hình Firestore
+    FIRESTORE_CREDENTIALS = os.environ.get("FIRESTORE_CREDENTIALS", "/path/to/your-firestore-credentials.json")
+
+    # Cấu hình lưu trữ cục bộ
+    STORAGE_PATH = "/tmp/chat_files/"
 
     # Cấu hình SQLite
     SQLITE_DB_PATH = os.environ.get("SQLITE_DB_PATH", "/tmp/app.db")
     MAX_SQLITE_SIZE = 100_000_000
 
-    # Cấu hình cho compobox và mặc định
-    SHOW_MODEL_COMBOBOX = False  # Hiển thị compobox chọn mô hình
-    DEFAULT_MODEL = "llama-3.3-70b-versatile"  # Mô hình mặc định
-    SHOW_MODE_COMBOBOX = True   # Hiển thị compobox chọn chế độ chat
-    DEFAULT_CHAT_MODE = "Grok"  # Chế độ chat mặc định
+    # Cấu hình cho combobox và mặc định
+    SHOW_MODEL_COMBOBOX = False
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+    SHOW_MODE_COMBOBOX = True
+    DEFAULT_CHAT_MODE = "Grok"
     AVAILABLE_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"]
     
     # Cấu hình phiên và xác thực
@@ -29,7 +34,6 @@ class Config:
     CONFIG_PASSWORD = os.environ.get("CONFIG_PASSWORD", "superapp2025")
 
     # Cấu hình đồng bộ Firestore
-    FIRESTORE_CREDENTIALS = os.environ.get("FIRESTORE_CREDENTIALS", "{}")
     SYNC_INTERVAL = 60
     BATCH_SIZE = 500
     SYNC_LOG_MAX_AGE = 604_800
@@ -46,12 +50,13 @@ class Config:
     QA_SEARCH_THRESHOLD = 0.8
     TRAINING_SEARCH_THRESHOLD = 0.8
     QA_HISTORY_LIMIT = 10
+    CHAT_HISTORY_LIMIT = 50
 
     # Danh sách bảng
-    SPECIAL_TABLES = {"collection_schemas", "users", "sessions", "client_states"} # Bảng luôn đồng bộ toàn bộ
-    PROTECTED_TABLES = {"protected_placeholder"}  # Bảng chỉ đồng bộ khi protected_only=True
-    SYSTEM_TABLES = {"sync_log", "sqlite_sequence"}  # Bảng hệ thống không đồng bộ
-    
+    SPECIAL_TABLES = {"collection_schemas", "users", "sessions", "client_states"}
+    PROTECTED_TABLES = {"protected_placeholder"}
+    SYSTEM_TABLES = {"sync_log", "sqlite_sequence"}
+
     # Cấu hình AI (Grok)
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
@@ -59,3 +64,15 @@ class Config:
     ALLOWED_FILE_EXTENSIONS = {".txt", ".pdf", ".jpg", ".png"}
     MAX_UPLOAD_SIZE = 5_000_000
     SECRET_KEY = os.environ.get("SECRET_KEY", "superapp-secret-key-2025")
+
+    # Cấu hình avatar
+    AVATAR_MAX_SIZE = 5_000_000
+    AVATAR_ALLOWED_FORMATS = ["image/jpeg", "image/png"]
+    AVATAR_STORAGE_PATH = "/tmp/avatars/"
+    AVATAR_FILE_EXTENSIONS = [".jpg", ".png"]  # Thêm để dùng trong ui.upload accept
+
+    # Cấu hình file chat
+    CHAT_FILE_MAX_SIZE = 10_000_000
+    CHAT_FILE_ALLOWED_FORMATS = ["image/jpeg", "image/png", "application/pdf", "text/plain"]
+    CHAT_FILE_EXTENSIONS = [".jpg", ".png", ".pdf", ".txt"]  # Thêm để dùng trong ui.upload accept
+    CHAT_FILE_STORAGE_PATH = STORAGE_PATH

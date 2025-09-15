@@ -13,3 +13,4 @@ python-Levenshtein==0.25.1
 httpx==0.27.0
 google-cloud-firestore>=2.14.0
 google-api-core>=2.15.0
+Pillow==10.0.0

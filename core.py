@@ -43,7 +43,7 @@ class DatabaseError(Exception):
     pass
 
 # Sửa đổi: Xóa sqlite_lock toàn cục, sẽ sử dụng self.sqlite_lock trong Core
-
+    
 class SQLiteHandler:
     """Xử lý các thao tác SQLite."""
     
@@ -80,7 +80,7 @@ class SQLiteHandler:
                             await conn.execute("PRAGMA journal_mode=WAL")
                             await conn.execute("PRAGMA busy_timeout=5000")
 
-                            # Tạo bảng users
+                            # Tạo bảng users với trường avatar
                             await conn.execute("""
                                 CREATE TABLE IF NOT EXISTS users (
                                     id TEXT PRIMARY KEY,
@@ -88,6 +88,7 @@ class SQLiteHandler:
                                     password TEXT NOT NULL,
                                     bot_password TEXT,
                                     role TEXT NOT NULL,
+                                    avatar TEXT,  -- Thêm trường avatar
                                     created_at INTEGER NOT NULL,
                                     updated_at INTEGER NOT NULL,
                                     timestamp INTEGER NOT NULL
@@ -140,12 +141,11 @@ class SQLiteHandler:
                                 )
                             """)
 
-                            
-                            # Tạo bảng qa_data mới
+                            # Tạo bảng qa_data
                             await conn.execute("""
                                 CREATE TABLE IF NOT EXISTS qa_data (
-                                    rowid INTEGER PRIMARY KEY AUTOINCREMENT,  -- INTEGER rowid cho FTS
-                                    id TEXT UNIQUE NOT NULL,                   -- UUID TEXT unique (không PK nữa)
+                                    rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    id TEXT UNIQUE NOT NULL,
                                     question TEXT NOT NULL,
                                     answer TEXT NOT NULL,
                                     category TEXT,
@@ -155,16 +155,15 @@ class SQLiteHandler:
                                 )
                             """)
 
-                            # *** THÊM FTS5 CHO QA_DATA (FULL-TEXT SEARCH) - Dùng content_rowid='rowid' (INTEGER) ***
-                            # Tạo virtual table FTS5
+                            # Tạo virtual table FTS5 cho qa_data
                             await conn.execute("""
                                 CREATE VIRTUAL TABLE IF NOT EXISTS qa_fts USING fts5(
                                     question, answer, category,
-                                    content='qa_data', content_rowid='rowid'  -- Dùng INTEGER rowid
+                                    content='qa_data', content_rowid='rowid'
                                 )
                             """)
 
-                            # Trigger sync sau INSERT (dùng new.rowid INTEGER)
+                            # Trigger sync sau INSERT
                             await conn.execute("""
                                 CREATE TRIGGER IF NOT EXISTS qa_data_ai AFTER INSERT ON qa_data BEGIN
                                     INSERT INTO qa_fts(rowid, question, answer, category)
@@ -172,7 +171,7 @@ class SQLiteHandler:
                                 END;
                             """)
 
-                            # Trigger sync sau DELETE (xóa bằng 'delete' special token, dùng old.rowid)
+                            # Trigger sync sau DELETE
                             await conn.execute("""
                                 CREATE TRIGGER IF NOT EXISTS qa_data_ad AFTER DELETE ON qa_data BEGIN
                                     INSERT INTO qa_fts(qa_fts, rowid, question, answer, category)
@@ -180,7 +179,7 @@ class SQLiteHandler:
                                 END;
                             """)
 
-                            # Trigger sync sau UPDATE (xóa cũ + insert mới, dùng old/new.rowid)
+                            # Trigger sync sau UPDATE
                             await conn.execute("""
                                 CREATE TRIGGER IF NOT EXISTS qa_data_au AFTER UPDATE ON qa_data BEGIN
                                     INSERT INTO qa_fts(qa_fts, rowid, question, answer, category)
@@ -190,8 +189,7 @@ class SQLiteHandler:
                                 END;
                             """)
 
-                            # Migrate data cũ (nếu có, dùng rowid INTEGER; giả sử id cũ map với rowid mới nếu recreate)
-                            # Nếu DB cũ có data, cần script migrate riêng: INSERT INTO qa_data (id, ...) SELECT ... , then sync FTS với rowid
+                            # Migrate data cũ
                             await conn.execute("""
                                 INSERT OR IGNORE INTO qa_fts(rowid, question, answer, category)
                                 SELECT rowid, question, answer, category FROM qa_data
@@ -216,7 +214,7 @@ class SQLiteHandler:
                                 )
                             """)
 
-                            # Tạo bảng chat_messages
+                            # Tạo bảng chat_messages với trường file_url
                             await conn.execute("""
                                 CREATE TABLE IF NOT EXISTS chat_messages (
                                     id TEXT PRIMARY KEY,
@@ -225,13 +223,13 @@ class SQLiteHandler:
                                     content TEXT,
                                     role TEXT,
                                     type TEXT,
+                                    file_url TEXT,  -- Thêm trường file_url
                                     timestamp INTEGER NOT NULL
                                 )
                             """)
 
-                            # Thêm dữ liệu mặc định (giữ nguyên như cũ, nhưng cho qa_data mới: insert với id UUID, rowid auto)
+                            # Thêm dữ liệu mặc định
                             current_time = int(time.time())
-                            # Tài khoản admin (giữ nguyên)
                             async with conn.execute(
                                 "SELECT COUNT(*) FROM users WHERE role = 'admin'"
                             ) as cursor:
@@ -265,7 +263,6 @@ class SQLiteHandler:
                                         f"Tạo tài khoản admin mặc định: {Config.ADMIN_USERNAME}"
                                     )
 
-                            # Tạo session mặc định cho admin (giữ nguyên)
                             async with conn.execute(
                                 "SELECT COUNT(*) FROM sessions WHERE username = ?",
                                 (Config.ADMIN_USERNAME,)
@@ -296,7 +293,6 @@ class SQLiteHandler:
                                         f"Tạo session mặc định cho {Config.ADMIN_USERNAME}"
                                     )
 
-                            # Tạo hoặc cập nhật client_state mặc định cho admin (giữ nguyên)
                             async with conn.execute(
                                 "SELECT COUNT(*) FROM client_states WHERE username = ?",
                                 (Config.ADMIN_USERNAME,)
@@ -344,7 +340,7 @@ class SQLiteHandler:
                                         f"{Config.ADMIN_USERNAME}"
                                     )
 
-                            # Schema mặc định cho collection_schemas (cập nhật qa_data với rowid INTEGER)
+                            # Cập nhật schema trong collection_schemas
                             schemas = {
                                 "users": {
                                     "id": "TEXT",
@@ -352,6 +348,7 @@ class SQLiteHandler:
                                     "password": "TEXT",
                                     "bot_password": "TEXT",
                                     "role": "TEXT",
+                                    "avatar": "TEXT",  # Thêm trường avatar
                                     "created_at": "INTEGER",
                                     "updated_at": "INTEGER",
                                     "timestamp": "INTEGER"
@@ -386,7 +383,7 @@ class SQLiteHandler:
                                     "details": "TEXT",
                                     "last_sync": "INTEGER"
                                 },
-                                "qa_data": {  # *** FIX: Thêm rowid INTEGER ***
+                                "qa_data": {
                                     "rowid": "INTEGER",
                                     "id": "TEXT",
                                     "question": "TEXT",
@@ -415,6 +412,7 @@ class SQLiteHandler:
                                     "content": "TEXT",
                                     "role": "TEXT",
                                     "type": "TEXT",
+                                    "file_url": "TEXT",  # Thêm trường file_url
                                     "timestamp": "INTEGER"
                                 }
                             }
@@ -460,7 +458,7 @@ class SQLiteHandler:
         except asyncio.TimeoutError as e:
             self.logger.error(f"Timeout khi khởi tạo SQLite: {str(e)}")
             raise DatabaseError(f"Timeout khi khởi tạo SQLite: {str(e)}")
-    
+
     async def register_user(self, username: str, password: str, bot_password: Optional[str] = None) -> Dict:
         try:
             async with asyncio.timeout(60):  # Timeout 1 phút
@@ -3300,4 +3298,203 @@ class Core:
                 self.logger.info(f"Đã xóa sync_log cũ (> {days_old} ngày)")
         except Exception as e:
             self.logger.warning(f"Lỗi cleanup sync_log: {str(e)}")
-        
+
+    
+
+    async def add_chat_message(
+        self,
+        username: str,
+        session_token: str,
+        content: str,
+        file_url: str = None,
+        role: str = "user",
+        message_type: str = "text"
+    ) -> Dict:
+        """Lưu tin nhắn chat vào bảng chat_messages và ghi sync_log."""
+        try:
+            message_id = str(uuid.uuid4())
+            current_time = int(time.time())
+
+            async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=30.0) as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO chat_messages 
+                    (id, session_token, username, content, role, type, file_url, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        message_id,
+                        session_token,
+                        username,
+                        content,
+                        role,
+                        message_type,
+                        file_url,
+                        current_time,
+                    ),
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO sync_log 
+                    (id, table_name, record_id, action, timestamp, details)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        "chat_messages",
+                        message_id,
+                        "INSERT",
+                        current_time,
+                        json.dumps(
+                            {
+                                "username": username,
+                                "action": "insert_chat_message",
+                                "session_token": session_token,
+                                "field": "file_url" if file_url else "content",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                await conn.commit()
+
+            self.logger.info(f"{username}: Đã lưu tin nhắn chat với ID {message_id}")
+
+            if file_url and file_url.endswith((".jpg", ".png", ".jpeg")):
+                return {
+                    "success": True,
+                    "message_id": message_id,
+                    "warning": (
+                        "Grok miễn phí không hỗ trợ phân tích hình ảnh, "
+                        "file được lưu để tham khảo."
+                    ),
+                }
+
+            return {"success": True, "message_id": message_id}
+
+        except Exception as e:
+            self.logger.error(f"Lỗi thêm tin nhắn chat cho {username}: {str(e)}")
+            raise DatabaseError(f"Lỗi thêm tin nhắn: {str(e)}")
+
+    
+    async def delete_chat_messages(self, username: str, session_token: str) -> List[str]:
+        """Xóa lịch sử chat, file/hình ảnh liên quan, và ghi sync_log cho hành động DELETE."""
+        try:
+            from utils.core_common import check_disk_space
+            check_disk_space()  # Kiểm tra dung lượng đĩa trước khi xóa
+
+            record_ids = []
+            file_urls = []
+            async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:
+                # Truy vấn id và file_url từ chat_messages
+                async with conn.execute(
+                    """
+                    SELECT id, file_url 
+                    FROM chat_messages 
+                    WHERE session_token = ? AND username = ?
+                    """,
+                    (session_token, username),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    record_ids = [row[0] for row in rows]
+                    file_urls = [row[1] for row in rows if row[1]]  # Lấy file_url không null
+
+                # Xóa bản ghi trong chat_messages
+                await conn.execute(
+                    """
+                    DELETE FROM chat_messages 
+                    WHERE session_token = ? AND username = ?
+                    """,
+                    (session_token, username),
+                )
+
+                current_time = int(time.time())
+                # Ghi log DELETE vào sync_log
+                for record_id in record_ids:
+                    await conn.execute(
+                        """
+                        INSERT INTO sync_log 
+                        (id, table_name, record_id, action, timestamp, details)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            "chat_messages",
+                            record_id,
+                            "DELETE",
+                            current_time,
+                            json.dumps(
+                                {
+                                    "username": username,
+                                    "action": "delete_chat_history",
+                                    "session_token": session_token,
+                                    "record_id": record_id,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
+
+                await conn.commit()
+
+            # Xóa file/hình ảnh vật lý trong /tmp/chat_files/
+            deleted_files = []
+            for file_url in file_urls:
+                file_id = file_url.split("/")[-1]  # Lấy file_id từ /files/<file_id>
+                file_path = os.path.join(Config.CHAT_FILE_STORAGE_PATH, file_id)
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        deleted_files.append(file_id)
+                        self.logger.info(f"{username}: Đã xóa file {file_path}")
+                    except Exception as e:
+                        self.logger.error(f"{username}: Lỗi xóa file {file_path}: {str(e)}")
+                        # Tiếp tục xử lý các file khác, không raise lỗi
+
+            self.logger.info(
+                f"{username}: Đã xóa {len(record_ids)} tin nhắn và {len(deleted_files)} file, ghi sync_log"
+            )
+            return record_ids
+
+        except Exception as e:
+            self.logger.error(f"Lỗi xóa lịch sử chat cho {username}: {str(e)}")
+            raise DatabaseError(f"Lỗi xóa lịch sử chat: {str(e)}")
+            
+    
+    async def upload_file(
+        self,
+        file_content: bytes,
+        content_type: str,
+        storage_path: str,
+        file_id: str
+    ) -> str:
+        try:
+            os.makedirs(storage_path, exist_ok=True)
+            file_path = os.path.join(storage_path, f"{file_id}")
+            with open(file_path, 'wb') as f:
+                f.write(file_content)
+
+            if not os.path.exists(file_path):
+                self.logger.error(
+                    f"File {file_id} không tồn tại tại {file_path} sau khi lưu"
+                )
+                raise RuntimeError(
+                    f"File {file_id} không tồn tại tại {file_path}"
+                )
+
+            self.logger.info(
+                f"Đã lưu file {file_id} vào {file_path}, exists: {os.path.exists(file_path)}"
+            )
+
+            # Trả về URL đúng dựa trên storage_path
+            if storage_path == Config.AVATAR_STORAGE_PATH:
+                return f"/avatars/{file_id}"
+            return f"/files/{file_id}"
+
+        except Exception as e:
+            self.logger.error(
+                f"Lỗi lưu file {file_id}: {str(e)}", exc_info=True
+            )
+            raise RuntimeError(f"Lỗi lưu file: {str(e)}")
+            
