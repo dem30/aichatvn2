@@ -50,14 +50,14 @@ async def retry_firestore_operation(operation: Callable, max_attempts: int = 3):
     try:
         result = await retry_policy(wrapped_operation)()
         logger.debug(f"Kết quả Firestore operation {operation.__name__}: {result}")
-        return result  # Trả về trực tiếp kết quả
+        return result
     except GoogleAPICallError as e:
         logger.error(f"Lỗi Firestore sau {max_attempts} lần thử: {str(e)}")
         raise DatabaseError(f"Hết lượt thử sau {max_attempts} lần: {str(e)}")
     except Exception as e:
         logger.error(f"Lỗi không mong muốn trong Firestore operation: {str(e)}")
         raise DatabaseError(f"Lỗi không mong muốn trong Firestore operation: {str(e)}")
-        
+
 def check_disk_space() -> None:
     """Kiểm tra dung lượng đĩa, ném lỗi nếu dưới 1MB."""
     disk_usage = shutil.disk_usage(os.path.dirname(Config.SQLITE_DB_PATH))
@@ -68,16 +68,20 @@ def check_disk_space() -> None:
 async def check_last_sync(core, username: str) -> dict:
     """Kiểm tra thời gian đồng bộ cuối cùng."""
     try:
-        async with core.sqlite_lock:
-            async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
-                async with conn.execute(
-                    "SELECT MAX(timestamp) FROM sync_log WHERE action IN ('SYNC_TO_SQLITE', 'SYNC_FROM_SQLITE')"
-                ) as cursor:
-                    last_sync = await cursor.fetchone()
-                    current_time = int(time.time())
-                    if last_sync and last_sync[0] and (current_time - last_sync[0]) < Config.SYNC_MIN_INTERVAL:
-                        return {"success": False, "message": f"Chờ {Config.SYNC_MIN_INTERVAL} giây"}
-                    return {"success": True, "message": "Có thể đồng bộ"}
+        async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
+            async with conn.execute(
+                """
+                SELECT MAX(timestamp) FROM sync_log 
+                WHERE action IN ('SYNC_TO_SQLITE', 'SYNC_FROM_SQLITE') 
+                AND details LIKE ?
+                """,
+                (f'%username": "{username}"%',)
+            ) as cursor:
+                last_sync = await cursor.fetchone()
+                current_time = int(time.time())
+                if last_sync and last_sync[0] and (current_time - last_sync[0]) < Config.SYNC_MIN_INTERVAL:
+                    return {"success": False, "message": f"Chờ {Config.SYNC_MIN_INTERVAL} giây"}
+                return {"success": True, "message": "Có thể đồng bộ"}
     except Exception as e:
         error_msg = f"Lỗi kiểm tra thời gian đồng bộ cho {username}: {str(e)}"
         has_admin_access = False
