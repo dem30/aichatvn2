@@ -526,7 +526,7 @@ async def auth_middleware(request: Request, call_next):
 @ui.page("/dashboard")
 async def dashboard(request: Request):
     try:
-        async with asyncio.timeout(2.8):  # Giới hạn dưới 3 giây
+        async with asyncio.timeout(10):  # Giới hạn dưới 3 giây
             start_time = time.time()
             session_token, username, client_state = await handle_session(request, core)
             logger.info(f"{username}: handle_session took {time.time() - start_time} seconds")
@@ -769,4 +769,4 @@ async def update_and_save_client_state(core: Core, session_token: str, username:
         return {"success": False, "error": "Trạng thái phiên quá lớn"}
     await core.save_client_state(session_token, sanitized_state)
     return {"success": True, "client_state": sanitized_state}
-    
+
