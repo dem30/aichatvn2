@@ -20,8 +20,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV SQLITE_DB_PATH=/tmp/app.db
-ENV PORT=10000   # bắt buộc cho Render
-
+ENV PORT=10000   
 RUN useradd -m -u 1000 appuser
 
 # Tạo thư mục lưu trữ và cấp quyền
