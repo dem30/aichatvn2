@@ -20,10 +20,11 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV SQLITE_DB_PATH=/tmp/app.db
-ENV PORT=10000   
+ENV PORT=7860
+
 RUN useradd -m -u 1000 appuser
 
-# Tạo thư mục lưu trữ và cấp quyền
+# Cấp quyền cho các thư mục lưu trữ
 RUN mkdir -p /tmp/nicegui /app/.nicegui /tmp/avatars /tmp/chat_files && \
     chown -R appuser:appuser /tmp/nicegui /app/.nicegui /tmp/avatars /tmp/chat_files && \
     chmod -R 777 /tmp/nicegui /app/.nicegui /tmp/avatars /tmp/chat_files
@@ -39,6 +40,5 @@ COPY uiapp/ uiapp/
 COPY utils/ utils/
 
 USER appuser
-
-EXPOSE 10000
-CMD ["uvicorn", "main:fastapi_app", "--host", "0.0.0.0", "--port", "10000"]
+EXPOSE 7860
+CMD ["uvicorn", "main:fastapi_app", "--host", "0.0.0.0", "--port", "7860"]
