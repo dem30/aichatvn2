@@ -1,4 +1,4 @@
-yyname: Sync requirements.txt to Hugging Face Hub
+name: Sync requirements.txt to Hugging Face Hub
 
 on:
   push:
