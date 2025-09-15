@@ -631,17 +631,13 @@ class ChatComponent:
     
 
     
-    
     async def render(self):
         username = self.client_state.get("username", "")
         self.client_id = getattr(context.client, 'id', None)
-
-        if (
-            not self.client_id
-            or not self.client_state
-            or "session_token" not in self.client_state
-            or not validate_name(self.client_state["session_token"])
-        ):
+        if (not self.client_id
+                or not self.client_state
+                or "session_token" not in self.client_state
+                or not validate_name(self.client_state["session_token"])):
             logger.error(f"{username}: Phiên hoặc client_id không hợp lệ")
             ui.notify("Lỗi: Không thể tải giao diện chat", type="negative")
             return False
@@ -649,126 +645,93 @@ class ChatComponent:
         try:
             async with asyncio.timeout(30):
                 check_disk_space()
-                client_storage = app.storage.client.setdefault(
-                    self.client_id, {}
-                )
+                client_storage = app.storage.client.setdefault(self.client_id, {})
                 new_container = ui.element("div").classes(self.classes)
 
                 with new_container:
                     ui.label("Chat AI").classes("text-lg font-semibold mb-2")
-                    self.messages_container = (
-                        ui.scroll_area()
-                        .classes("flex-1 mb-2 h-[50vh] sm:h-[60vh]")
-                    )
+                    self.messages_container = ui.scroll_area().classes("flex-1 mb-2 h-[50vh] sm:h-[60vh]")
 
                     if Config.SHOW_MODEL_COMBOBOX:
-                        ui.select(
+                        model_select = ui.select(
                             Config.AVAILABLE_MODELS,
                             label="Chọn mô hình AI",
-                            value=self.client_state.get(
-                                "model", Config.DEFAULT_MODEL
-                            ),
+                            value=self.client_state.get("model", Config.DEFAULT_MODEL)
                         ).classes("w-full sm:w-1/4 mb-2").on(
                             "update:modelValue",
-                            lambda e: self.on_model_change(e.args),
+                            lambda e: self.on_model_change(e.args)
                         )
                     else:
                         self.client_state["model"] = Config.DEFAULT_MODEL
 
                     if Config.SHOW_MODE_COMBOBOX:
                         mode_options = ["Grok", "QA", "Hybrid"]
-                        ui.select(
+                        mode_select = ui.select(
                             mode_options,
                             label="Chế độ Chat",
-                            value=self.client_state.get(
-                                "chat_mode", Config.DEFAULT_CHAT_MODE
-                            ),
+                            value=self.client_state.get("chat_mode", Config.DEFAULT_CHAT_MODE)
                         ).classes("w-full sm:w-1/4 mb-2").on(
                             "update:modelValue",
-                            lambda e: self.handle_mode_change(
-                                e.args, mode_options
-                            ),
+                            lambda e: self.handle_mode_change(e.args, mode_options)
                         )
                     else:
-                        self.client_state["chat_mode"] = (
-                            Config.DEFAULT_CHAT_MODE
+                        self.client_state["chat_mode"] = Config.DEFAULT_CHAT_MODE
+
+                    with ui.element("div").classes("w-full flex flex-col sm:flex-row gap-2"):
+                        self.message_input = ui.textarea(
+                            label="Tin nhắn",
+                            placeholder=self.placeholder
+                        ).props("clearable").classes("flex-1").bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        ).on(
+                            "keydown.enter",
+                            lambda e: self.handle_send() if not e.args.get("repeat") else None
                         )
 
-                    with ui.element("div").classes(
-                        "w-full flex flex-col sm:flex-row gap-2"
-                    ):
-                        self.message_input = (
-                            ui.textarea(
-                                label="Tin nhắn",
-                                placeholder=self.placeholder,
-                            )
-                            .props("clearable")
-                            .classes("flex-1")
-                            .bind_enabled_from(
-                                self,
-                                "loading",
-                                backward=lambda x: not x,
-                            )
-                            .on(
-                                "keydown.enter",
-                                lambda e: self.handle_send()
-                                if not e.args.get("repeat")
-                                else None,
-                            )
+                        self.upload_input = ui.upload(
+                            label="Tải lên hình ảnh/file",
+                            auto_upload=False,
+                            on_upload=lambda e: self.handle_upload(e)
+                        ).props(
+                            f'accept="{",".join(Config.CHAT_FILE_ALLOWED_FORMATS)}"'
+                        ).classes(
+                            "w-full sm:w-auto"
+                        ).bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
                         )
 
-                        # Các nút điều khiển
-                        with ui.element("div").classes("flex gap-2 items-center"):
-                            # Input upload ẩn
-                            self.upload_input = ui.upload(
-                                auto_upload=False,
-                                on_upload=lambda e: self.handle_upload(e),
-                            ).props(
-                                f'accept="{",".join(Config.CHAT_FILE_ALLOWED_FORMATS)}"'
-                            ).classes("hidden")
+                        ui.button(
+                            "Tải lên",
+                            on_click=lambda: self.upload_input.run_method("upload")
+                        ).classes(
+                            "bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto"
+                        ).bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        )
 
-                            # Nút Upload -> click để mở dialog
-                            ui.button(
-                                icon="upload",
-                                on_click=lambda: self.upload_input.run_method("click"),
-                            ).classes(
-                                "bg-blue-600 text-white hover:bg-blue-700 w-12 h-12 flex-shrink-0"
-                            ).bind_enabled_from(
-                                self, "loading", backward=lambda x: not x
-                            ).tooltip("Tải lên hình ảnh/file")
+                        ui.button(
+                            self.send_button_label,
+                            on_click=self.handle_send,
+                            icon="send"
+                        ).classes(
+                            "bg-blue-600 text-white w-full sm:w-auto"
+                        ).bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        )
 
-                            # Nút Send
-                            ui.button(
-                                self.send_button_label,
-                                on_click=self.handle_send,
-                                icon="send",
-                            ).classes(
-                                "bg-blue-600 text-white sm:w-auto flex-shrink-0"
-                            ).bind_enabled_from(
-                                self, "loading", backward=lambda x: not x
-                            )
-
-                            # Nút Xóa lịch sử
-                            ui.button(
-                                "Xóa lịch sử",
-                                on_click=self.reset,
-                                icon="delete",
-                            ).classes(
-                                "bg-red-600 text-white sm:w-auto flex-shrink-0"
-                            )
+                        ui.button(
+                            "Xóa lịch sử",
+                            on_click=self.reset,
+                            icon="delete"
+                        ).classes("bg-red-600 text-white w-full sm:w-auto")
 
                 if self.container:
-                    if (
-                        hasattr(self.container, "parent_slot")
-                        and self.container in self.container.parent_slot.children
-                    ):
+                    if (hasattr(self.container, 'parent_slot')
+                            and self.container in self.container.parent_slot.children):
                         self.container.clear()
                         self.container.delete()
                     else:
-                        logger.debug(
-                            f"{username}: Bỏ qua xóa container cũ "
-                            f"vì không tồn tại trong danh sách children"
-                        )
+                        logger.debug(f"{username}: Bỏ qua xóa container cũ vì không tồn tại trong danh sách children")
 
                 self.container = new_container
                 client_storage["chat_card_container"] = new_container
@@ -791,9 +754,7 @@ class ChatComponent:
                 try:
                     new_container.delete()
                 except Exception as e:
-                    logger.warning(
-                        f"{username}: Lỗi khi xóa container mới: {str(e)}"
-                    )
+                    logger.warning(f"{username}: Lỗi khi xóa container mới: {str(e)}")
             self.rendered = False
             return False
 
