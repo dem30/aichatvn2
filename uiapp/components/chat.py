@@ -758,12 +758,10 @@ class ChatComponent:
             self.rendered = False
             return False
 
+    
     async def update_messages(self):
         username = self.client_state.get("username", "")
-        if (not self.rendered
-                or not self.messages_container
-                or not self.client_id
-                or context.client.id != self.client_id):
+        if not self.rendered or not self.messages_container or not self.client_id or context.client.id != self.client_id:
             logger.warning(f"{username}: Giao diện chưa sẵn sàng")
             ui.notify("Lỗi: Giao diện chat chưa sẵn sàng", type="negative")
             return False
@@ -779,26 +777,39 @@ class ChatComponent:
                         if len((msg["content"] or "").encode()) > 1_000_000:
                             logger.warning(f"{username}: Tin nhắn quá lớn: {msg['content'][:100]}...")
                             continue
-
                         role = "Bạn" if msg["role"] == "user" else "AI"
                         classes = (
                             "bg-blue-100 ml-4 mr-2 self-end"
                             if msg["role"] == "user"
                             else "bg-green-100 mr-4 ml-2 self-start"
                         )
-                        with ui.element("div").classes(f"p-1 sm:p-2 mb-1 rounded {classes} max-w-[80%]"):
+                        with ui.element("div").classes(f"p-1 sm:p-2 mb-1 rounded {classes} max-w-[80%] break-words"):
                             if msg.get("type") == "image" and msg.get("file_url"):
                                 file_id = msg["file_url"].split("/")[-1]
                                 file_path = os.path.join(Config.CHAT_FILE_STORAGE_PATH, file_id)
                                 if os.path.exists(file_path):
-                                    ui.image(msg["file_url"]).classes("max-w-[80%] sm:max-w-xs rounded")
+                                    ui.image(msg["file_url"]).classes("max-w-[80%] sm:max-w-xs rounded object-contain")
                                 else:
                                     logger.error(f"{username}: Hình ảnh không tồn tại: {file_path}")
                                     ui.label(f"Hình ảnh không tồn tại: {msg['file_url']}").classes("text-red-500")
                             elif msg.get("type") == "file" and msg.get("file_url"):
-                                ui.link(f"Tải file: {msg['content'] or 'File'}", msg["file_url"]).classes("text-blue-600")
+                                filename = msg["content"].replace("[Uploaded file: ", "").rstrip("]")
+                                max_filename_length = 50
+                                if len(filename) > max_filename_length:
+                                    name, ext = os.path.splitext(filename)
+                                    short_filename = f"{name[:max_filename_length-4-len(ext)]}...{ext}"
+                                else:
+                                    short_filename = filename
+                                ui.link(f"Tải file: {short_filename}", msg["file_url"]).classes("text-blue-600 break-words")
                             else:
-                                ui.markdown(f"**{role}**: {msg['content']}").classes("text-sm")
+                                content = msg["content"]
+                                max_display_length = 500  # Giới hạn số ký tự hiển thị
+                                if len(content) > max_display_length:
+                                    short_content = content[:max_display_length] + "..."
+                                    with ui.expansion(f"**{role}**: {short_content}", icon="chat").classes("text-sm break-words"):
+                                        ui.markdown(content).classes("text-sm break-words")
+                                else:
+                                    ui.markdown(f"**{role}**: {content}").classes("text-sm break-words")
 
                             ui.label(
                                 f"({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.get('timestamp', 0)))})"
@@ -816,7 +827,7 @@ class ChatComponent:
             logger.error(f"{username}: Lỗi cập nhật tin nhắn: {str(e)}", exc_info=True)
             ui.notify("Lỗi cập nhật tin nhắn", type="negative")
             return False
-
+            
     async def handle_upload(self, event):
         username = self.client_state.get("username", "")
         try:
