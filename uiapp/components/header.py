@@ -534,7 +534,6 @@ class HeaderComponent:
                 ui.notify(f"Lỗi đồng bộ {direction}: {str(e)}", type="negative")
             return {"error": str(e)}
 
-    
     async def handle_upload(self, event):
         """Xử lý upload avatar và cập nhật lại UI."""
         try:
@@ -548,14 +547,10 @@ class HeaderComponent:
             size = file.tell()
             file.seek(0)
             if size > Config.AVATAR_MAX_SIZE:
-                raise ValueError(
-                    f"Kích thước file vượt quá {Config.AVATAR_MAX_SIZE / (1024 * 1024)} MB"
-                )
+                raise ValueError(f"Kích thước file vượt quá {Config.AVATAR_MAX_SIZE / (1024 * 1024)} MB")
 
             if content_type not in Config.AVATAR_ALLOWED_FORMATS:
-                raise ValueError(
-                    f"Định dạng không được hỗ trợ. Cho phép: {Config.AVATAR_ALLOWED_FORMATS}"
-                )
+                raise ValueError(f"Định dạng không được hỗ trợ. Cho phép: {Config.AVATAR_ALLOWED_FORMATS}")
 
             file_content = file.read()
             if content_type.startswith("image/"):
@@ -585,9 +580,7 @@ class HeaderComponent:
                 ) as cursor:
                     existing = await cursor.fetchone()
                     if existing and existing[0] == avatar_url:
-                        logger.warning(
-                            f"{self.username}: Avatar giống hệt đã tồn tại, bỏ qua"
-                        )
+                        logger.warning(f"{self.username}: Avatar giống hệt đã tồn tại, bỏ qua")
                         if context.client.has_socket_connection:
                             ui.notify("Avatar này đã tồn tại", type="warning")
                         return
@@ -629,42 +622,26 @@ class HeaderComponent:
             # Cập nhật client_state và xóa cache
             self.client_state["avatar_url"] = f"{avatar_url}?t={int(time.time())}"
             self.cached_user_data = None
-            logger.info(
-                f"{self.username}: Upload avatar thành công, URL: "
-                f"{self.client_state['avatar_url']}"
-            )
+            logger.info(f"{self.username}: Upload avatar thành công, URL: {self.client_state['avatar_url']}")
 
             # Cập nhật giao diện ngay lập tức
-            if self.rendered:
-                logger.debug(
-                    f"{self.username}: Gọi update() để làm mới giao diện sau upload"
-                )
-                await self.update()
-            else:
-                logger.debug(
-                    f"{self.username}: Giao diện chưa render, gọi render()"
-                )
-                await self.render()
-
+            await self.update()
             if context.client.has_socket_connection:
                 ui.notify("Upload avatar thành công", type="positive")
 
         except Exception as e:
-            logger.error(
-                f"{self.username}: Lỗi upload avatar: {str(e)}",
-                exc_info=True,
-            )
+            logger.error(f"{self.username}: Lỗi upload avatar: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
                 ui.notify(f"Lỗi upload avatar: {str(e)}", type="negative")
 
+    
+    
     async def update(self):
         try:
             logger.debug(f"{self.username}: Bắt đầu update HeaderComponent")
 
             if not self.rendered or not self.container or not self.right_drawer:
-                logger.warning(
-                    f"{self.username}: Giao diện chưa render, thử render lại"
-                )
+                logger.warning(f"{self.username}: Giao diện chưa render, thử render lại")
                 await self.render()
                 return
 
@@ -677,14 +654,12 @@ class HeaderComponent:
             if self.username_label:
                 self.username_label.set_text(f"Chào mừng {self.username}")
                 logger.debug(
-                    f"{self.username}: Cập nhật username_label: "
-                    f"Chào mừng {self.username}"
+                    f"{self.username}: Cập nhật username_label: Chào mừng {self.username}"
                 )
             if self.drawer_username_label:
                 self.drawer_username_label.set_text(f"Chào mừng {self.username}")
                 logger.debug(
-                    f"{self.username}: Cập nhật drawer_username_label: "
-                    f"Chào mừng {self.username}"
+                    f"{self.username}: Cập nhật drawer_username_label: Chào mừng {self.username}"
                 )
 
             # Cập nhật avatar
@@ -693,91 +668,82 @@ class HeaderComponent:
                 avatar_url = f"{avatar_url}?t={int(time.time())}"
 
                 # Xử lý avatar_image_header
-                if isinstance(self.avatar_image_header, ui.image):
+                if isinstance(self.avatar_image_header, ui.label):
+                    logger.debug(
+                        f"{self.username}: avatar_image_header là ui.label, thay bằng ui.image"
+                    )
+                    self.avatar_image_header.delete()
+                    with self.container:  # Đảm bảo thêm vào container
+                        self.avatar_image_header = ui.image(avatar_url).classes(
+                            "w-8 h-8 rounded-full"
+                        )
+                    logger.debug(
+                        f"{self.username}: Tạo mới avatar_image_header: {avatar_url}"
+                    )
+                elif self.avatar_image_header:
                     self.avatar_image_header.set_source(avatar_url)
                     logger.debug(
                         f"{self.username}: Cập nhật avatar_image_header: {avatar_url}"
                     )
                 else:
-                    logger.debug(
-                        f"{self.username}: avatar_image_header không phải ui.image, tạo mới"
-                    )
-                    if self.avatar_image_header:
-                        self.avatar_image_header.delete()
                     with self.container:
-                        with ui.element("div").classes("flex items-center space-x-2"):
-                            self.avatar_image_header = ui.image(avatar_url).classes(
-                                "w-8 h-8 rounded-full"
-                            )
-                        logger.debug(
-                            f"{self.username}: Tạo mới avatar_image_header: {avatar_url}"
+                        self.avatar_image_header = ui.image(avatar_url).classes(
+                            "w-8 h-8 rounded-full"
                         )
+                    logger.debug(
+                        f"{self.username}: Tạo mới avatar_image_header: {avatar_url}"
+                    )
 
                 # Xử lý avatar_image_drawer
-                if isinstance(self.avatar_image_drawer, ui.image):
+                if isinstance(self.avatar_image_drawer, ui.label):
+                    logger.debug(
+                        f"{self.username}: avatar_image_drawer là ui.label, thay bằng ui.image"
+                    )
+                    self.avatar_image_drawer.delete()
+                    with self.right_drawer:
+                        self.avatar_image_drawer = ui.image(avatar_url).classes(
+                            "w-10 h-10 rounded-full"
+                        )
+                    logger.debug(
+                        f"{self.username}: Tạo mới avatar_image_drawer: {avatar_url}"
+                    )
+                elif self.avatar_image_drawer:
                     self.avatar_image_drawer.set_source(avatar_url)
                     logger.debug(
                         f"{self.username}: Cập nhật avatar_image_drawer: {avatar_url}"
                     )
                 else:
-                    logger.debug(
-                        f"{self.username}: avatar_image_drawer không phải ui.image, tạo mới"
-                    )
-                    if self.avatar_image_drawer:
-                        self.avatar_image_drawer.delete()
                     with self.right_drawer:
-                        with ui.element("div").classes("flex items-center space-x-2"):
-                            self.avatar_image_drawer = ui.image(avatar_url).classes(
-                                "w-10 h-10 rounded-full"
-                            )
-                        logger.debug(
-                            f"{self.username}: Tạo mới avatar_image_drawer: {avatar_url}"
+                        self.avatar_image_drawer = ui.image(avatar_url).classes(
+                            "w-10 h-10 rounded-full"
                         )
+                    logger.debug(
+                        f"{self.username}: Tạo mới avatar_image_drawer: {avatar_url}"
+                    )
             else:
                 # Hiển thị chữ cái đầu nếu không có avatar
                 initial = self.username[0].upper()
                 if self.avatar_image_header:
                     self.avatar_image_header.delete()
                 with self.container:
-                    with ui.element("div").classes("flex items-center space-x-2"):
-                        self.avatar_image_header = ui.label(initial).classes(
-                            "w-8 h-8 rounded-full bg-gray-300 text-center "
-                            "flex items-center justify-center"
-                        )
-                    logger.debug(
-                        f"{self.username}: Hiển thị chữ cái đầu cho avatar_image_header: {initial}"
+                    self.avatar_image_header = ui.label(initial).classes(
+                        "w-8 h-8 rounded-full bg-gray-300 text-center flex items-center justify-center"
                     )
+                logger.debug(
+                    f"{self.username}: Hiển thị chữ cái đầu cho avatar_image_header: {initial}"
+                )
 
                 if self.avatar_image_drawer:
                     self.avatar_image_drawer.delete()
                 with self.right_drawer:
-                    with ui.element("div").classes("flex items-center space-x-2"):
-                        self.avatar_image_drawer = ui.label(initial).classes(
-                            "w-10 h-10 rounded-full bg-gray-300 text-center "
-                            "flex items-center justify-center"
-                        )
-                    logger.debug(
-                        f"{self.username}: Hiển thị chữ cái đầu cho avatar_image_drawer: {initial}"
+                    self.avatar_image_drawer = ui.label(initial).classes(
+                        "w-10 h-10 rounded-full bg-gray-300 text-center flex items-center justify-center"
                     )
-
-            # Cập nhật sync_label nếu tồn tại
-            if self.is_admin and self.sync_label:
-                status = await self.check_last_sync()
-                if "error" in status:
-                    self.sync_label.set_text("Lỗi trạng thái đồng bộ")
-                    logger.warning(
-                        f"{self.username}: Lỗi trạng thái đồng bộ: {status['error']}"
-                    )
-                else:
-                    self.sync_label.set_text(
-                        f"Lần đồng bộ cuối: {status.get('last_sync', 'Chưa đồng bộ')}"
-                    )
-                    logger.debug(
-                        f"{self.username}: Cập nhật sync_label: {self.sync_label.text}"
-                    )
+                logger.debug(
+                    f"{self.username}: Hiển thị chữ cái đầu cho avatar_image_drawer: {initial}"
+                )
 
             await safe_ui_update()
-            logger.info(f"{self.username}: Update HeaderComponent thành công")
 
         except Exception as e:
             logger.error(
@@ -785,8 +751,5 @@ class HeaderComponent:
                 exc_info=True,
             )
             if context.client.has_socket_connection:
-                ui.notify(
-                    f"Lỗi update HeaderComponent: {str(e)}",
-                    type="negative",
-                )
+                ui.notify(f"Lỗi update HeaderComponent: {str(e)}", type="negative")
                 
