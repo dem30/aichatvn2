@@ -758,6 +758,7 @@ class ChatComponent:
             self.rendered = False
             return False
 
+
     
     async def update_messages(self):
         username = self.client_state.get("username", "")
@@ -779,11 +780,11 @@ class ChatComponent:
                             continue
                         role = "Bạn" if msg["role"] == "user" else "AI"
                         classes = (
-                            "bg-blue-100 ml-4 mr-2 self-end"
+                            "bg-blue-100 mr-1 self-start"
                             if msg["role"] == "user"
-                            else "bg-green-100 mr-4 ml-2 self-start"
+                            else "bg-green-100 mr-1 self-start"
                         )
-                        with ui.element("div").classes(f"p-1 sm:p-2 mb-1 rounded {classes} max-w-[80%] break-words"):
+                        with ui.element("div").classes(f"p-1 sm:p-2 mb-1 rounded {classes} max-w-[98%] whitespace-normal"):
                             if msg.get("type") == "image" and msg.get("file_url"):
                                 file_id = msg["file_url"].split("/")[-1]
                                 file_path = os.path.join(Config.CHAT_FILE_STORAGE_PATH, file_id)
@@ -800,16 +801,10 @@ class ChatComponent:
                                     short_filename = f"{name[:max_filename_length-4-len(ext)]}...{ext}"
                                 else:
                                     short_filename = filename
-                                ui.link(f"Tải file: {short_filename}", msg["file_url"]).classes("text-blue-600 break-words")
+                                ui.link(f"Tải file: {short_filename}", msg["file_url"]).classes("text-blue-600 whitespace-normal")
                             else:
                                 content = msg["content"]
-                                max_display_length = 500  # Giới hạn số ký tự hiển thị
-                                if len(content) > max_display_length:
-                                    short_content = content[:max_display_length] + "..."
-                                    with ui.expansion(f"**{role}**: {short_content}", icon="chat").classes("text-sm break-words"):
-                                        ui.markdown(content).classes("text-sm break-words")
-                                else:
-                                    ui.markdown(f"**{role}**: {content}").classes("text-sm break-words")
+                                ui.markdown(f"**{role}**: {content}").classes("text-sm whitespace-normal")
 
                             ui.label(
                                 f"({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(msg.get('timestamp', 0)))})"
