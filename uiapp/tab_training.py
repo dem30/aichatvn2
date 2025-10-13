@@ -8,6 +8,7 @@ from core import Core
 from uiapp.components.training import TrainingComponent
 from utils.core_common import validate_name
 from utils.logging import get_logger
+from uiapp.language import get_text
 
 logger = get_logger("TabTraining")
 
@@ -15,24 +16,25 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
     async def render_func(core: Core, username: str, is_admin: bool, client_state: Dict):
         client_id = context.client.id
-        logger.debug(f"{username}: Bắt đầu render_func cho Tab Training, client_id={client_id}")
+        language = client_state.get("language", app.storage.user.get("language", "vi"))
+        logger.debug(f"{username}: Bắt đầu render_func cho Tab Training, client_id={client_id}, language={language}")
 
         if not hasattr(core, "sqlite_handler"):
             logger.error(f"{username}: Core không hợp lệ: Thiếu sqlite_handler")
             if context.client.has_socket_connection:
-                ui.notify("Lỗi hệ thống: Core không hợp lệ", type="negative")
+                ui.notify(get_text(language, "invalid_core_error", "Core không hợp lệ: Thiếu sqlite_handler"), type="negative")
             return
 
         if not client_state or "session_token" not in client_state or not validate_name(client_state["session_token"]):
             logger.error(f"{username}: Phiên đăng nhập không hợp lệ")
             if context.client.has_socket_connection:
-                ui.notify("Lỗi: Phiên đăng nhập không hợp lệ", type="negative")
+                ui.notify(get_text(language, "invalid_session", "Phiên không hợp lệ"), type="negative")
             return
 
         if not is_admin:
             logger.warning(f"{username}: Không có quyền admin")
             if context.client.has_socket_connection:
-                ui.notify("Chỉ admin có quyền truy cập tab training này", type="negative")
+                ui.notify(get_text(language, "no_admin_access", "Chỉ admin có quyền truy cập tab training này"), type="negative")
             return
 
         client_storage = app.storage.client.setdefault(client_id, {})
@@ -41,11 +43,12 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
             training_component = TrainingComponent(
                 core=core,
                 client_state=client_state,
-                classes="w-full p-4 sm:p-6 md:p-8 flex flex-col gap-4"
+                classes="w-full p-4 sm:p-6 md:p-8 flex flex-col gap-4",
+                language=language
             )
             training_component.client_id = client_id
             client_storage["training_component"] = training_component
-            logger.debug(f"{username}: Tạo mới TrainingComponent cho client_id={client_id}")
+            logger.debug(f"{username}: Tạo mới TrainingComponent cho client_id={client_id}, language={language}")
 
         try:
             card_container = client_storage.get("training_card_container")
@@ -66,12 +69,12 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
             ui.update()
             logger.info(f"{username}: Render tab Training thành công, client_id={client_id}")
         except Exception as e:
-            error_msg = f"Lỗi render Tab Training: {str(e)}"
+            error_msg = get_text(language, "tab_render_error", "Lỗi render tab {tab_name}: {error}", tab_name="Training", error=str(e))
             if is_admin:
-                error_msg += f"\nChi tiết: {traceback.format_exc()}"
+                error_msg += f"\n{get_text(language, 'details', 'Chi tiết')}: {traceback.format_exc()}"
             logger.error(error_msg, exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify("Đã xảy ra lỗi khi tải giao diện training.", type="negative")
+                ui.notify(get_text(language, "render_training_error", "Đã xảy ra lỗi khi tải giao diện training."), type="negative")
             if training_component.container:
                 try:
                     training_component.container.delete()
@@ -82,7 +85,8 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
     async def update_func(core: Core, username: str, is_admin: bool, client_state: Dict):
         client_id = context.client.id
-        logger.debug(f"{username}: Bắt đầu update_func cho Tab Training, client_id={client_id}")
+        language = client_state.get("language", app.storage.user.get("language", "vi"))
+        logger.debug(f"{username}: Bắt đầu update_func cho Tab Training, client_id={client_id}, language={language}")
 
         client_storage = app.storage.client.setdefault(client_id, {})
         training_component = client_storage.get("training_component")
@@ -100,11 +104,11 @@ async def create_tab(core: Core) -> Tuple[Callable, Callable]:
                 else:
                     logger.warning(f"{username}: Cập nhật tab Training thất bại")
                     if context.client.has_socket_connection:
-                        ui.notify("Lỗi: Không thể cập nhật tab Training", type="negative")
+                        ui.notify(get_text(language, "update_training_error", "Lỗi: Không thể cập nhật tab Training"), type="negative")
         else:
             logger.warning(f"{username}: TrainingComponent không tồn tại hoặc chưa render, không thể cập nhật")
             if context.client.has_socket_connection:
-                ui.notify("Lỗi: Giao diện Training chưa sẵn sàng", type="negative")
+                ui.notify(get_text(language, "training_ui_not_ready", "Lỗi: Giao diện Training chưa sẵn sàng"), type="negative")
 
     return render_func, update_func
 
@@ -128,6 +132,7 @@ ui.add_css("""
 @app.on_disconnect
 async def cleanup_client_storage():
     client_id = context.client.id
+    language = app.storage.client.get(client_id, {}).get("language", "vi")
     logger.debug(f"{client_id}: Client ngắt kết nối, bắt đầu dọn dẹp")
     client_storage = app.storage.client.get(client_id, {})
     card_container = client_storage.get("training_card_container")
