@@ -1,3 +1,4 @@
+
 import asyncio
 import hashlib
 import json
@@ -15,21 +16,23 @@ from core import Core
 from uiapp.components.form import FormComponent
 from utils.logging import get_logger
 from utils.core_common import check_disk_space, sanitize_field_name
+from uiapp.language import get_text
 
 logger = get_logger("TrainingComponent")
 
 QA_HISTORY_LIMIT = getattr(Config, "QA_HISTORY_LIMIT", 50)
 
-# Hàm retry cho ui.update
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 async def safe_ui_update():
-    logger.debug("Thử gọi safe_ui_update")
+    logger.debug("Trying safe_ui_update")
     ui.update()
 
 class TrainingComponent:
-    def __init__(self, core: Core, client_state: Dict, classes: str):
+    def __init__(self, core: Core, client_state: Dict, classes: str, language: str = None):
         self.core = core
         self.client_state = client_state or {}
+        # Prioritize language from app.storage.user, then client_state
+        self.language = app.storage.user.get("language", client_state.get("language", "vi"))
         self.classes = classes
         self.container = None
         self.qa_list_container = None
@@ -40,45 +43,54 @@ class TrainingComponent:
         self.state_lock = asyncio.Semaphore(1)
         self.log_lock = asyncio.Semaphore(1)
         self.processing_lock = asyncio.Lock()
-        logger.info(f"{self.username}: Khởi tạo TrainingComponent")
+        logger.info(f"{self.username}: Initialized TrainingComponent with language={self.language}")
         
-        # Khởi tạo FormComponent
-        self.qa_form = FormComponent(
-            fields={
-                "id": {"label": "ID", "type": "text", "props": "type=hidden", "value": ""},
-                "question": {
-                    "label": "Câu hỏi",
-                    "type": "text",
-                    "validation": {"required": "lambda x: bool(x) or 'Bắt buộc'"},
-                    "placeholder": "Nhập câu hỏi..."
-                },
-                "answer": {
-                    "label": "Câu trả lời",
-                    "type": "textarea",
-                    "validation": {"required": "lambda x: bool(x) or 'Bắt buộc'"},
-                    "placeholder": "Nhập câu trả lời..."
-                },
-                "category": {
-                    "label": "Danh mục",
-                    "type": "select",
-                    "options": ["chat", "support", "other"],
-                    "value": "chat",
-                    "validation": {"required": "lambda x: bool(x) or 'Bắt buộc'"}
-                }
-            },
-            on_submit=self.handle_qa_submit,
-            submit_label="Lưu Q&A",
-            core=core,
-            client_state=client_state
-        )
+        # Initialize FormComponent with current language
+        self.qa_form = self._create_form_component()
         self.search_input = None
         self.json_input = None
         asyncio.create_task(self.enable_wal_mode())
 
+    def _create_form_component(self) -> FormComponent:
+        """Create or recreate FormComponent with current language."""
+        return FormComponent(
+            fields={
+                "id": {"label": get_text(self.language, "id_label", "ID"), "type": "text", "props": "type=hidden", "value": ""},
+                "question": {
+                    "label": get_text(self.language, "question_label", "Question"),
+                    "type": "text",
+                    "validation": {"required": f"lambda x: bool(x) or '{get_text(self.language, 'required_field', 'Required')}'"},
+                    "placeholder": get_text(self.language, "question_placeholder", "Enter question...")
+                },
+                "answer": {
+                    "label": get_text(self.language, "answer_label", "Answer"),
+                    "type": "textarea",
+                    "validation": {"required": f"lambda x: bool(x) or '{get_text(self.language, 'required_field', 'Required')}'"},
+                    "placeholder": get_text(self.language, "answer_placeholder", "Enter answer...")
+                },
+                "category": {
+                    "label": get_text(self.language, "category_label", "Category"),
+                    "type": "select",
+                    "options": [
+                        get_text(self.language, "category_chat", "chat"),
+                        get_text(self.language, "category_support", "support"),
+                        get_text(self.language, "category_other", "other")
+                    ],
+                    "value": get_text(self.language, "category_chat", "chat"),
+                    "validation": {"required": f"lambda x: bool(x) or '{get_text(self.language, 'required_field', 'Required')}'"}
+                }
+            },
+            on_submit=self.handle_qa_submit,
+            submit_label=get_text(self.language, "save_qa_button", "Save Q&A"),
+            core=self.core,
+            client_state=self.client_state,
+            language=self.language
+        )
+
     async def render(self):
         async with self.processing_lock:
             if self.rendered and self.client_id == context.client.id:
-                logger.info(f"{self.username}: Giao diện đã render, chỉ cập nhật")
+                logger.info(f"{self.username}: UI already rendered, updating instead")
                 await self.update()
                 return
 
@@ -88,11 +100,11 @@ class TrainingComponent:
                 self.container.delete()
             self.container = ui.card().classes(self.classes)
             with self.container:
-                ui.label("Quản lý Q&A").classes("text-lg font-semibold mb-4")
+                ui.label(get_text(self.language, "manage_qa_label", "Manage Q&A")).classes("text-lg font-semibold mb-4")
                 
                 self.search_input = ui.input(
-                    label="Tìm kiếm Q&A",
-                    placeholder="Nhập từ khóa để tìm kiếm trong câu hỏi hoặc câu trả lời..."
+                    label=get_text(self.language, "search_qa_label", "Search Q&A"),
+                    placeholder=get_text(self.language, "search_qa_placeholder", "Enter keyword to search in questions or answers...")
                 ).classes("mb-4 w-full")
                 self.search_input.on("change", self.handle_search)
                 
@@ -102,21 +114,68 @@ class TrainingComponent:
                 await self.update_qa_records()
                 
                 self.json_input = ui.textarea(
-                    "Nhập JSON Q&A",
-                    placeholder='[{"question": "Câu hỏi", "answer": "Trả lời", "category": "chat"}]'
+                    label=get_text(self.language, "json_qa_label", "Import JSON Q&A"),
+                    placeholder='[{"question": "' + get_text(self.language, "question_label", "Question") + '", "answer": "' + get_text(self.language, "answer_label", "Answer") + '", "category": "' + get_text(self.language, "category_chat", "chat") + '"}]'
                 ).classes("mb-4 w-full")
-                ui.button("Nhập Q&A từ JSON", on_click=self.handle_json_submit).classes("bg-blue-600 text-white hover:bg-blue-700 mb-4 w-full")
+                ui.button(get_text(self.language, "import_json_button", "Import Q&A from JSON"), on_click=self.handle_json_submit).classes("bg-blue-600 text-white hover:bg-blue-700 mb-4 w-full")
                 
                 ui.upload(on_upload=self.handle_file_upload).props("accept=.json,.csv").classes("mb-4 w-full")
                 
                 with ui.row().classes("w-full"):
-                    ui.button("Xuất Q&A sang JSON", on_click=self.handle_export_qa).classes("bg-green-600 text-white hover:bg-green-700 mr-2 w-full")
-                    ui.button("Xóa toàn bộ Q&A", on_click=self.on_reset).classes("bg-red-600 text-white hover:bg-red-700 w-full")
+                    ui.button(get_text(self.language, "export_qa_button", "Export Q&A to JSON"), on_click=self.handle_export_qa).classes("bg-green-600 text-white hover:bg-green-700 mr-2 w-full")
+                    ui.button(get_text(self.language, "delete_all_qa_button", "Delete All Q&A"), on_click=self.on_reset).classes("bg-red-600 text-white hover:bg-red-700 w-full")
 
             self.rendered = True
-            logger.info(f"{self.username}: Đã render giao diện TrainingComponent")
+            # Save language to app.storage.user
+            app.storage.user["language"] = self.language
+            await self.save_state_and_config()
+            logger.info(f"{self.username}: Rendered TrainingComponent UI with language={self.language}")
 
-    
+    async def update(self):
+        try:
+            self.client_id = getattr(context.client, 'id', None)
+            logger.debug(f"{self.username}: Starting update TrainingComponent, client_id={self.client_id}, current context.client.id={context.client.id}")
+            
+            # Check for language change
+            new_language = app.storage.user.get("language", self.client_state.get("language", "vi"))
+            if new_language != self.language:
+                logger.info(f"{self.username}: Language changed from {self.language} to {new_language}")
+                self.language = new_language
+                self.qa_form = self._create_form_component()  # Recreate form with new language
+                await self.render()  # Re-render entire UI with new language
+                if context.client.has_socket_connection:
+                    ui.notify(get_text(self.language, "language_updated", "Language updated to {lang}", lang=self.language), type="positive")
+                return True
+
+            if not self.rendered:
+                logger.warning(f"{self.username}: UI not rendered, attempting to render")
+                await self.render()
+                return True
+
+            if self.search_input:
+                self.search_input.value = ""
+                logger.debug(f"{self.username}: Reset search_input to refresh all Q&A")
+            else:
+                logger.warning(f"{self.username}: search_input missing, creating new")
+                self.search_input = ui.input(
+                    label=get_text(self.language, "search_qa_label", "Search Q&A"),
+                    placeholder=get_text(self.language, "search_qa_placeholder", "Enter keyword to search in questions or answers...")
+                ).classes("mb-4 w-full")
+                self.search_input.on("change", self.handle_search)
+
+            await self.update_qa_records()
+            await safe_ui_update()
+            logger.info(f"{self.username}: Updated TrainingComponent UI successfully")
+            
+            if context.client.has_socket_connection:
+                ui.notify(get_text(self.language, "updated_qa_data", "Updated Q&A data"), type="positive")
+            return True
+        except Exception as e:
+            logger.error(f"{self.username}: Error updating UI: {str(e)}", exc_info=True)
+            if context.client.has_socket_connection:
+                ui.notify(get_text(self.language, "update_training_error", "Error updating training UI"), type="negative")
+            return False
+
     async def fetch_qa_data(
         self,
         progress_callback: Optional[Callable[[float], None]] = None,
@@ -126,7 +185,7 @@ class TrainingComponent:
         try:
             async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
                 search_value = self.search_input.value.strip() if self.search_input else ""
-                logger.debug(f"{self.username}: fetch_qa_data với search_value='{search_value}', page={page}, page_size={page_size}")
+                logger.debug(f"{self.username}: fetch_qa_data with search_value='{search_value}', page={page}, page_size={page_size}")
                 
                 if search_value:
                     clean_search = search_value.rstrip('?.!;,').strip()
@@ -147,7 +206,7 @@ class TrainingComponent:
                         logger.debug(f"{self.username}: FTS count: {total_matches}")
 
                         if total_matches == 0:
-                            logger.info(f"{self.username}: Không tìm thấy kết quả FTS cho '{search_value}' (cleaned: '{clean_search}')")
+                            logger.info(f"{self.username}: No FTS results for '{search_value}' (cleaned: '{clean_search}')")
                             return [], 0
 
                         query = """
@@ -175,23 +234,23 @@ class TrainingComponent:
                             } for row in rows
                         ]
                         
-                        logger.info(f"{self.username}: FTS search '{search_value}' (cleaned '{clean_search}'): {total_matches} matches, trang {page} ({len(data)} items)")
+                        logger.info(f"{self.username}: FTS search '{search_value}' (cleaned '{clean_search}'): {total_matches} matches, page {page} ({len(data)} items)")
                         
                         if total_matches > 1000:
-                            logger.warning(f"{self.username}: Nhiều kết quả FTS ({total_matches}), hiển thị top {len(data)}")
+                            logger.warning(f"{self.username}: Many FTS results ({total_matches}), showing top {len(data)}")
                             if context.client.has_socket_connection:
-                                ui.notify(f"Tìm thấy nhiều kết quả ({total_matches}), chỉ hiển thị trang {page}", type="info")
+                                ui.notify(get_text(self.language, "too_many_results", "Found many results ({count}), showing page {page}", count=total_matches, page=page), type="info")
                         
                         if not data:
                             if context.client.has_socket_connection:
-                                ui.notify("Không tìm thấy Q&A phù hợp", type="info")
+                                ui.notify(get_text(self.language, "no_qa_found", "No matching Q&A found"), type="info")
                         
                         return data, total_matches
                     
                     except Exception as fts_error:
-                        logger.warning(f"{self.username}: FTS5 error: {str(fts_error)}. Fallback sang fuzzy in-memory (giới hạn 1000 records)")
+                        logger.warning(f"{self.username}: FTS5 error: {str(fts_error)}. Falling back to fuzzy in-memory (limit 1000 records)")
                         if context.client.has_socket_connection:
-                            ui.notify("Sử dụng tìm kiếm cơ bản (FTS chưa sẵn sàng)", type="warning")
+                            ui.notify(get_text(self.language, "fts_not_ready", "Using basic search (FTS not ready)"), type="warning")
                         
                         async with conn.execute(
                             "SELECT id, question, answer, category, created_by, created_at, timestamp "
@@ -201,7 +260,7 @@ class TrainingComponent:
                             all_rows = await cursor.fetchall()
                         
                         if not all_rows:
-                            logger.info(f"{self.username}: Không có dữ liệu Q&A")
+                            logger.info(f"{self.username}: No Q&A data found")
                             return [], 0
                         
                         threshold = getattr(Config, "TRAINING_SEARCH_THRESHOLD", 0.7)
@@ -233,10 +292,10 @@ class TrainingComponent:
                         end_idx = start_idx + page_size
                         data = matches[start_idx:end_idx]
                         
-                        logger.info(f"{self.username}: Fallback fuzzy search '{search_value}' (trong 1000 records): {total_matches} matches, trang {page} ({len(data)} items)")
+                        logger.info(f"{self.username}: Fallback fuzzy search '{search_value}' (in 1000 records): {total_matches} matches, page {page} ({len(data)} items)")
                         
                         if len(all_rows) == 1000:
-                            logger.warning(f"{self.username}: Fallback chỉ search trong 1000 records gần nhất")
+                            logger.warning(f"{self.username}: Fallback searched only in 1000 most recent records")
                         
                         return data, total_matches
                 
@@ -266,107 +325,69 @@ class TrainingComponent:
                         } for row in rows
                     ]
                     
-                    logger.info(f"{self.username}: Tải {len(data)} bản ghi Q&A không search, tổng: {total_matches}")
+                    logger.info(f"{self.username}: Loaded {len(data)} Q&A records without search, total: {total_matches}")
                     return data, total_matches
                 
                 if progress_callback:
                     await progress_callback(1.0)
         
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi lấy dữ liệu Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error fetching Q&A data: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi lấy dữ liệu Q&A: {str(e)}", type="negative")
+                ui.notify(get_text(self.language, "fetch_qa_error", "Error fetching Q&A data: {error}", error=str(e)), type="negative")
             return [], 0
 
     async def update_qa_records(self):
         try:
             data, total_count = await self.fetch_qa_data(page=1, page_size=QA_HISTORY_LIMIT)
-            logger.debug(f"{self.username}: Trước khi cập nhật, số bản ghi Q&A: {len(data)}, tổng: {total_count}")
+            logger.debug(f"{self.username}: Before updating, Q&A records: {len(data)}, total: {total_count}")
             
             if not self.container or not hasattr(self.container, 'parent_slot'):
-                logger.warning(f"{self.username}: container không tồn tại hoặc không hợp lệ, tạo mới")
+                logger.warning(f"{self.username}: container missing or invalid, creating new")
                 self.container = ui.card().classes(self.classes)
             
             if not self.qa_list_container or not hasattr(self.qa_list_container, 'parent_slot'):
-                logger.warning(f"{self.username}: qa_list_container không tồn tại hoặc không hợp lệ, tạo mới")
+                logger.warning(f"{self.username}: qa_list_container missing or invalid, creating new")
                 self.qa_list_container = ui.element("div").classes("w-full")
                 with self.container:
                     self.qa_list_container.move(target=self.container)
-                logger.debug(f"{self.username}: Đã tạo và gắn qa_list_container vào container")
+                logger.debug(f"{self.username}: Created and attached qa_list_container to container")
             
             self.qa_list_container.clear()
             with self.qa_list_container:
                 if not data:
-                    ui.label("⚠️ Chưa có dữ liệu Q&A").classes("text-gray-500 italic")
+                    ui.label(get_text(self.language, "no_qa_data_label", "⚠️ No Q&A data available")).classes("text-gray-500 italic")
                 else:
                     for row in data:
                         with ui.card().classes("w-full mb-2 p-4"):
-                            ui.label(f"Câu hỏi: {row['question']}").classes("font-bold")
-                            ui.label(f"Trả lời: {row['answer']}")
-                            ui.label(f"Danh mục: {row['category']}")
-                            ui.label(f"Người tạo: {row['created_by']}")
-                            ui.label(f"Thời gian tạo: {row['created_at']}")
+                            ui.label(f"{get_text(self.language, 'question_label', 'Question')}: {row['question']}").classes("font-bold")
+                            ui.label(f"{get_text(self.language, 'answer_label', 'Answer')}: {row['answer']}")
+                            ui.label(f"{get_text(self.language, 'category_label', 'Category')}: {row['category']}")
+                            ui.label(f"{get_text(self.language, 'created_by_label', 'Created by')}: {row['created_by']}")
+                            ui.label(f"{get_text(self.language, 'created_at_label', 'Created at')}: {row['created_at']}")
                             with ui.row():
-                                ui.button("Sửa", on_click=lambda r=row: self.handle_edit(r)).classes("bg-blue-600 text-white hover:bg-blue-700 mr-2")
-                                ui.button("Xóa", on_click=lambda r=row: self.delete_row(r)).classes("bg-red-600 text-white hover:bg-red-700")
+                                ui.button(get_text(self.language, "edit_button", "Edit"), on_click=lambda r=row: self.handle_edit(r)).classes("bg-blue-600 text-white hover:bg-blue-700 mr-2")
+                                ui.button(get_text(self.language, "delete_button", "Delete"), on_click=lambda r=row: self.delete_row(r)).classes("bg-red-600 text-white hover:bg-red-700")
             
             await safe_ui_update()
-            logger.info(f"{self.username}: Loaded {len(data)} Q&A records from DB, tổng: {total_count}")
+            logger.info(f"{self.username}: Loaded {len(data)} Q&A records from DB, total: {total_count}")
             logger.debug(f"{self.username}: qa_list_container parent: {getattr(self.qa_list_container, 'parent_slot', 'None')}")
             
             if context.client.has_socket_connection:
-                ui.notify(f"Đã tải {len(data)} bản ghi Q&A", type="positive")
+                ui.notify(get_text(self.language, "loaded_qa_records", "Loaded {count} Q&A records", count=len(data)), type="positive")
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi tải Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error loading Q&A: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi tải Q&A: {str(e)}", type="negative")
+                ui.notify(get_text(self.language, "load_qa_error", "Error loading Q&A: {error}", error=str(e)), type="negative")
 
-    async def update(self):
-        try:
-            self.client_id = getattr(context.client, 'id', None)
-            logger.debug(f"{self.username}: Bắt đầu update TrainingComponent, client_id={self.client_id}, current context.client.id={context.client.id}")
-            
-            if not self.rendered:
-                logger.warning(f"{self.username}: Giao diện chưa render, thử render lại")
-                success = await self.render()
-                if not success:
-                    logger.error(f"{self.username}: Render lại thất bại")
-                    if context.client.has_socket_connection:
-                        ui.notify("Lỗi: Giao diện training chưa sẵn sàng", type="negative")
-                    return False
-
-            if self.search_input:
-                self.search_input.value = ""
-                logger.debug(f"{self.username}: Đặt lại search_input để làm mới toàn bộ Q&A")
-            else:
-                logger.warning(f"{self.username}: search_input không tồn tại, tạo mới nếu cần")
-                self.search_input = ui.input(
-                    label="Tìm kiếm Q&A",
-                    placeholder="Nhập từ khóa để tìm kiếm trong câu hỏi hoặc câu trả lời..."
-                ).classes("mb-4 w-full")
-                self.search_input.on("change", self.handle_search)
-
-            await self.update_qa_records()
-            await safe_ui_update()
-            logger.info(f"{self.username}: Cập nhật giao diện training thành công")
-            
-            if context.client.has_socket_connection:
-                ui.notify("Đã cập nhật dữ liệu Q&A", type="positive")
-            return True
-        except Exception as e:
-            logger.error(f"{self.username}: Lỗi cập nhật giao diện: {str(e)}", exc_info=True)
-            if context.client.has_socket_connection:
-                ui.notify("Lỗi cập nhật giao diện training", type="negative")
-            return False
-            
     async def enable_wal_mode(self):
         try:
             async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
                 await conn.execute("PRAGMA journal_mode=WAL")
                 await conn.commit()
-                logger.info(f"{self.username}: Đã bật chế độ WAL cho SQLite")
+                logger.info(f"{self.username}: Enabled WAL mode for SQLite")
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi bật WAL: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error enabling WAL: {str(e)}", exc_info=True)
 
     async def refresh_session_token(self):
         try:
@@ -375,38 +396,38 @@ class TrainingComponent:
                 if new_token and isinstance(new_token, str):
                     async with self.state_lock:
                         self.client_state["session_token"] = new_token
-                    logger.info(f"{self.username}: Đã làm mới session_token")
+                    logger.info(f"{self.username}: Refreshed session_token")
                     return True
                 else:
-                    logger.warning(f"{self.username}: Không thể làm mới session_token")
+                    logger.warning(f"{self.username}: Failed to refresh session_token")
                     return False
             else:
-                logger.warning(f"{self.username}: Không làm mới session_token vì client đã disconnect")
+                logger.warning(f"{self.username}: Skipped session_token refresh due to disconnected client")
                 return False
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi làm mới session_token: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error refreshing session_token: {str(e)}", exc_info=True)
             return False
 
     async def cleanup_client_storage(self):
         try:
             if self.container and context.client.has_socket_connection:
                 self.container.clear()
-                logger.info(f"{self.username}: Đã dọn dẹp container")
+                logger.info(f"{self.username}: Cleared container")
             else:
-                logger.warning(f"{self.username}: Bỏ qua cleanup vì client đã disconnect hoặc container không tồn tại")
+                logger.warning(f"{self.username}: Skipped cleanup due to disconnected client or missing container")
         except Exception as e:
-            logger.warning(f"{self.username}: Bỏ qua cleanup vì client đã disconnect: {str(e)}")
+            logger.warning(f"{self.username}: Skipped cleanup due to disconnected client: {str(e)}")
 
     def _handle_result_error(self, result, action: str) -> bool:
         if isinstance(result, str):
-            logger.error(f"{self.username}: Lỗi {action}: {result}")
+            logger.error(f"{self.username}: Error {action}: {result}")
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi {action}: {result}", type="negative")
+                ui.notify(get_text(self.language, "generic_error", "Error {action}: {error}", action=action, error=result), type="negative")
             return True
         if isinstance(result, dict) and "error" in result:
-            logger.error(f"{self.username}: Lỗi {action}: {result['error']}")
+            logger.error(f"{self.username}: Error {action}: {result['error']}")
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi {action}: {result['error']}", type="negative")
+                ui.notify(get_text(self.language, "generic_error", "Error {action}: {error}", action=action, error=result['error']), type="negative")
             return True
         return False
 
@@ -416,18 +437,20 @@ class TrainingComponent:
                 if not self.client_state.get("session_token"):
                     if not await self.refresh_session_token():
                         if context.client.has_socket_connection:
-                            ui.notify("Lỗi: Không thể làm mới session_token", type="negative")
+                            ui.notify(get_text(self.language, "invalid_session", "Error: Failed to refresh session_token"), type="negative")
                         return False
                 check_disk_space()
                 self.client_state["timestamp"] = int(time.time())
+                self.client_state["language"] = self.language
                 self.client_state.pop("qa_records", None)
                 state_json = json.dumps(self.client_state, ensure_ascii=False)
                 if len(state_json.encode()) > Config.MAX_UPLOAD_SIZE:
-                    logger.error(f"{self.username}: Trạng thái quá lớn")
+                    logger.error(f"{self.username}: State too large")
                     if context.client.has_socket_connection:
-                        ui.notify("Lỗi: Trạng thái phiên quá lớn", type="negative")
+                        ui.notify(get_text(self.language, "state_too_large", "Error: Session state too large"), type="negative")
                     return False
                 await self.core.save_client_state(self.client_state["session_token"], self.client_state)
+                app.storage.user["language"] = self.language
                 state_id = hashlib.sha256(
                     f"{self.username}_{self.client_state['session_token']}".encode()
                 ).hexdigest()
@@ -436,26 +459,66 @@ class TrainingComponent:
                         table_name="client_states",
                         record_id=state_id,
                         action="SAVE_TRAINING_STATE",
-                        details={"username": self.username, "action": "save_training_state"},
+                        details={"username": self.username, "action": "save_training_state", "language": self.language},
                         username=self.username
                     )
-                logger.info(f"{self.username}: Lưu trạng thái thành công")
+                logger.info(f"{self.username}: Saved state successfully with language={self.language}")
                 return True
             except Exception as e:
-                logger.error(f"{self.username}: Lỗi lưu trạng thái: {str(e)}", exc_info=True)
+                logger.error(f"{self.username}: Error saving state: {str(e)}", exc_info=True)
                 if context.client.has_socket_connection:
-                    ui.notify("Lỗi lưu trạng thái", type="negative")
+                    ui.notify(get_text(self.language, "save_state_error", "Error saving state"), type="negative")
                 return False
 
-    
     
     async def delete_row(self, row_data):
         async with self.db_lock:
             try:
                 record_id = row_data["id"]
                 result = await self.core.delete_record("qa_data", record_id, self.username)
-                if self._handle_result_error(result, "xóa Q&A"):
+                if self._handle_result_error(
+                    result,
+                    get_text(self.language, "delete_qa_action", "delete Q&A")
+                ):
                     return
+
+                # Ghi log DELETE và đặt last_sync = 0
+                current_time = int(time.time())
+                async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:
+                    # Ghi log DELETE vào sync_log
+                    await conn.execute(
+                        """
+                        INSERT INTO sync_log (id, table_name, record_id, action, timestamp, details)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            "qa_data",
+                            record_id,
+                            "DELETE",
+                            current_time,
+                            json.dumps(
+                                {"username": self.username, "action": "delete_record"},
+                                ensure_ascii=False
+                            )
+                        )
+                    )
+
+                    # Đặt last_sync = 0 cho qa_data
+                    await conn.execute(
+                        """
+                        DELETE FROM sync_log
+                        WHERE table_name = ?
+                        AND action IN ('sync_to_firestore', 'sync_to_sqlite')
+                        """,
+                        ("qa_data",)
+                    )
+                    await conn.commit()
+                    logger.debug(
+                        f"{self.username}: Đã xóa sync_log cho qa_data "
+                        f"với action='sync_to_firestore' và 'sync_to_sqlite' để đặt last_sync=0"
+                    )
+
                 async with self.log_lock:
                     await self.core.log_sync_action(
                         table_name="qa_data",
@@ -464,26 +527,48 @@ class TrainingComponent:
                         details={"username": self.username, "action": "delete_record"},
                         username=self.username
                     )
-                await self.update_qa_records()
-                if context.client.has_socket_connection:
-                    ui.notify(f"Đã xóa Q&A {record_id}", type="positive")
-            except Exception as e:
-                logger.error(f"{self.username}: Lỗi xóa Q&A: {str(e)}", exc_info=True)
-                if context.client.has_socket_connection:
-                    ui.notify(f"Lỗi xóa Q&A: {str(e)}", type="negative")
 
+                await self.update_qa_records()
+
+                if context.client.has_socket_connection:
+                    ui.notify(
+                        get_text(
+                            self.language,
+                            "deleted_qa",
+                            (
+                                "Deleted Q&A {id}. Data still exists in Firestore, "
+                                "recoverable via sync_to_sqlite."
+                            ),
+                            id=record_id
+                        ),
+                        type="positive"
+                    )
+                    logger.info(
+                        f"{self.username}: Deleted Q&A {record_id} and logged DELETE. "
+                        f"Data still exists in Firestore, recoverable via sync_to_sqlite."
+                    )
+
+            except Exception as e:
+                logger.error(f"{self.username}: Error deleting Q&A: {str(e)}", exc_info=True)
+                if context.client.has_socket_connection:
+                    ui.notify(
+                        get_text(
+                            self.language,
+                            "delete_qa_error",
+                            "Error deleting Q&A: {error}",
+                            error=str(e)
+                        ),
+                        type="negative"
+                    )
+                    
     async def _get_search_record_ids(self, search_query: str) -> List[str]:
-        """Helper: Lấy record_ids dùng FTS (giống search) hoặc fallback LIKE, với clean query."""
         if not search_query:
-            # No search: All records
             async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
                 async with conn.execute("SELECT id FROM qa_data WHERE created_by = ?", (self.username,)) as cursor:
                     return [row[0] for row in await cursor.fetchall()]
         
-        # Clean query giống fetch_qa_data
         clean_search = search_query.rstrip('?.!;,').strip()
         try:
-            # Ưu tiên FTS (giống search)
             fts_query = f'({clean_search}* OR "{clean_search}" OR {clean_search})'
             query = """
                 SELECT qa_data.id FROM qa_fts JOIN qa_data ON qa_fts.rowid = qa_data.rowid
@@ -495,60 +580,108 @@ class TrainingComponent:
                     logger.debug(f"{self.username}: FTS delete query '{search_query}' (clean '{clean_search}'): {len(record_ids)} IDs: {record_ids[:5]}...")
                     return record_ids
         except Exception as fts_error:
-            logger.warning(f"{self.username}: FTS error in delete: {str(fts_error)}. Fallback LIKE")
-            # Fallback LIKE (nhưng clean)
+            logger.warning(f"{self.username}: FTS error in delete: {str(fts_error)}. Falling back to LIKE")
             async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
                 async with conn.execute(
                     "SELECT id FROM qa_data WHERE (question LIKE ? OR answer LIKE ?) AND created_by = ?",
-                    (f"%{clean_search}%", f"%{clean_search}%", self.username)  # Use clean_search
+                    (f"%{clean_search}%", f"%{clean_search}%", self.username)
                 ) as cursor:
                     record_ids = [row[0] for row in await cursor.fetchall()]
                     logger.debug(f"{self.username}: LIKE delete fallback '{search_query}': {len(record_ids)} IDs")
                     return record_ids
 
+    
+    
     async def on_reset(self):
         async with self.db_lock:
             try:
                 if not self.client_state.get("session_token"):
                     if not await self.refresh_session_token():
                         if context.client.has_socket_connection:
-                            ui.notify("Lỗi: Phiên đăng nhập không hợp lệ", type="negative")
-                        logger.error(f"{self.username}: Phiên đăng nhập không hợp lệ")
+                            ui.notify(
+                                get_text(
+                                    self.language,
+                                    "invalid_session",
+                                    "Error: Invalid session",
+                                ),
+                                type="negative",
+                            )
+                        logger.error(f"{self.username}: Invalid session")
                         return
 
                 search_query = (getattr(self.search_input, "value", "") or "").strip()
-                record_ids = await self._get_search_record_ids(search_query)  # Fix: Dùng FTS/LIKE consistent với search
+                record_ids = await self._get_search_record_ids(search_query)
 
                 if not record_ids:
                     if context.client.has_socket_connection:
-                        ui.notify("Không có Q&A nào để xóa", type="info")
-                    logger.info(f"{self.username}: Không có Q&A nào để xóa")
+                        ui.notify(
+                            get_text(
+                                self.language,
+                                "no_qa_to_delete",
+                                "No Q&A to delete",
+                            ),
+                            type="info",
+                        )
+                    logger.info(f"{self.username}: No Q&A to delete")
                     return
 
-                logger.debug(f"{self.username}: Record IDs to delete: {record_ids}")  # Debug log
+                logger.debug(f"{self.username}: Record IDs to delete: {record_ids}")
 
                 if context.client.has_socket_connection:
                     with ui.dialog() as dialog, ui.card():
                         ui.label(
-                            f"Bạn có chắc muốn xóa {len(record_ids)} Q&A"
-                            f"{' khớp với tìm kiếm' if search_query else ''}?"
+                            get_text(
+                                self.language,
+                                "confirm_delete_qa",
+                                "Are you sure you want to delete {count} Q&A{search}?",
+                                count=len(record_ids),
+                                search=" matching search" if search_query else "",
+                            )
                         )
                         with ui.row():
-                            ui.button("OK", on_click=lambda: dialog.submit(True))
-                            ui.button("Hủy", on_click=lambda: dialog.submit(False))
+                            ui.button(
+                                get_text(self.language, "ok_button", "OK"),
+                                on_click=lambda: dialog.submit(True),
+                            )
+                            ui.button(
+                                get_text(self.language, "cancel_button", "Cancel"),
+                                on_click=lambda: dialog.submit(False),
+                            )
+
                     confirm = await dialog
-                    logger.debug(f"{self.username}: Giá trị confirm từ dialog: {confirm}")
+                    logger.debug(f"{self.username}: Confirm value from dialog: {confirm}")
+
                     if not confirm:
-                        ui.notify("Hủy xóa", type="info")
-                        logger.info(f"{self.username}: Hủy xóa Q&A")
+                        ui.notify(
+                            get_text(
+                                self.language,
+                                "cancel_delete",
+                                "Delete cancelled",
+                            ),
+                            type="info",
+                        )
+                        logger.info(f"{self.username}: Delete Q&A cancelled")
                         return
 
                 current_time = int(time.time())
-                async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:  # Move inside for batch
+                async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
+                    is_full_reset = not search_query
+
+                    # Lấy record_ids của username để ghi log DELETE
+                    if is_full_reset:
+                        async with conn.execute(
+                            "SELECT id FROM qa_data WHERE created_by = ?",
+                            (self.username,),
+                        ) as cursor:
+                            record_ids = [row[0] for row in await cursor.fetchall()]
+
+                    # Ghi log DELETE cho từng bản ghi
                     for record_id in record_ids:
                         await conn.execute(
                             """
-                            INSERT INTO sync_log (id, table_name, record_id, action, timestamp, details)
+                            INSERT INTO sync_log (
+                                id, table_name, record_id, action, timestamp, details
+                            )
                             VALUES (?, ?, ?, ?, ?, ?)
                             """,
                             (
@@ -559,18 +692,44 @@ class TrainingComponent:
                                 current_time,
                                 json.dumps(
                                     {"username": self.username, "action": "delete_record"},
-                                    ensure_ascii=False
-                                )
-                            )
+                                    ensure_ascii=False,
+                                ),
+                            ),
                         )
 
-                    # Delete bằng IDs (an toàn hơn, tránh LIKE/FTS error ở delete)
-                    placeholders = ','.join('?' for _ in record_ids)
-                    await conn.execute(f"DELETE FROM qa_data WHERE id IN ({placeholders}) AND created_by = ?", (*record_ids, self.username))
+                    if is_full_reset:
+                        # Xóa toàn bộ bảng qa_data
+                        await conn.execute("DELETE FROM qa_data")
+                        logger.debug(f"{self.username}: Đã xóa toàn bộ bảng qa_data")
+                    else:
+                        # Xóa các bản ghi trong qa_data theo record_ids
+                        placeholders = ",".join("?" for _ in record_ids)
+                        await conn.execute(
+                            f"""
+                            DELETE FROM qa_data
+                            WHERE id IN ({placeholders})
+                            AND created_by = ?
+                            """,
+                            (*record_ids, self.username),
+                        )
+                        logger.debug(
+                            f"{self.username}: Đã xóa {len(record_ids)} bản ghi qa_data"
+                        )
 
+                    # Xóa sync_log đồng bộ của qa_data
+                    await conn.execute(
+                        """
+                        DELETE FROM sync_log
+                        WHERE table_name = ?
+                        AND action IN ('sync_to_firestore', 'sync_to_sqlite')
+                        """,
+                        ("qa_data",),
+                    )
                     await conn.commit()
+                    logger.debug(f"{self.username}: Đã xóa sync_log đồng bộ cho qa_data")
 
                 await self.update_qa_records()
+
                 async with self.log_lock:
                     await self.core.log_sync_action(
                         table_name="qa_data",
@@ -578,26 +737,50 @@ class TrainingComponent:
                         action="DELETE",
                         details={
                             "username": self.username,
-                            "action": "delete_all_qa" if not search_query else "delete_search_results",
+                            "action": (
+                                "delete_all_qa" if is_full_reset else "delete_search_results"
+                            ),
                             "count": len(record_ids),
-                            "search_query": search_query if search_query else None
+                            "search_query": search_query if search_query else None,
                         },
-                        username=self.username
+                        username=self.username,
                     )
 
                 if context.client.has_socket_connection:
-                    message = f"Đã xóa {len(record_ids)} Q&A" + (" khớp với tìm kiếm" if search_query else "")
+                    message = get_text(
+                        self.language,
+                        "deleted_qa_batch",
+                        (
+                            "Deleted all {count} Q&A{search} in SQLite. "
+                            "To delete permanently, sync to Firestore. "
+                            "To recover, sync from Firestore."
+                        ),
+                        count=len(record_ids),
+                        search=" matching search" if search_query else "",
+                    )
                     ui.notify(message, type="positive")
-                logger.info(
-                    f"{self.username}: Đã xóa {len(record_ids)} Q&A "
-                    f"{'khớp với tìm kiếm' if search_query else 'toàn bộ (của user)'} và ghi log DELETE"
-                )
-            except Exception as e:
-                logger.error(f"{self.username}: Lỗi xóa Q&A: {str(e)}", exc_info=True)
-                if context.client.has_socket_connection:
-                    ui.notify(f"Lỗi xóa Q&A: {str(e)}", type="negative")
 
-    
+                logger.info(
+                    f"{self.username}: Deleted {len(record_ids)} Q&A "
+                    f"{'matching search' if search_query else 'all'} and logged DELETE. "
+                    f"Data still exists in Firestore, recoverable via sync_to_sqlite or can be deleted via sync_to_firestore."
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"{self.username}: Error deleting Q&A: {str(e)}",
+                    exc_info=True,
+                )
+                if context.client.has_socket_connection:
+                    ui.notify(
+                        get_text(
+                            self.language,
+                            "delete_qa_error",
+                            "Error deleting Q&A: {error}",
+                            error=str(e),
+                        ),
+                        type="negative",
+                    )
     
     async def handle_export_qa(self):
         try:
@@ -605,13 +788,13 @@ class TrainingComponent:
             page = 1
             while True:
                 result = await self.core.read_records("qa_data", self.username, page=page, page_size=500)
-                if self._handle_result_error(result, "xuất Q&A"):
+                if self._handle_result_error(result, get_text(self.language, "export_qa_action", "export Q&A")):
                     return
                 data = result.get("results", [])
                 if not isinstance(data, list):
-                    logger.error(f"{self.username}: Kết quả từ read_records không phải danh sách: {data}")
+                    logger.error(f"{self.username}: Result from read_records is not a list: {data}")
                     if context.client.has_socket_connection:
-                        ui.notify("Lỗi: Dữ liệu Q&A không hợp lệ", type="negative")
+                        ui.notify(get_text(self.language, "invalid_qa_data", "Error: Invalid Q&A data"), type="negative")
                     return
                 if not data:
                     break
@@ -621,7 +804,7 @@ class TrainingComponent:
                 page += 1
             if not all_data:
                 if context.client.has_socket_connection:
-                    ui.notify("Không có dữ liệu Q&A để xuất", type="warning")
+                    ui.notify(get_text(self.language, "no_qa_to_export", "No Q&A data to export"), type="warning")
                 return
             json_data = json.dumps(all_data, ensure_ascii=False, indent=2)
             filename = f"qa_data_{int(time.time())}.json"
@@ -636,11 +819,11 @@ class TrainingComponent:
                     username=self.username
                 )
             if context.client.has_socket_connection:
-                ui.notify(f"Đã xuất {len(all_data)} Q&A", type="positive")
+                ui.notify(get_text(self.language, "exported_qa", "Exported {count} Q&A", count=len(all_data)), type="positive")
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi xuất Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error exporting Q&A: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi xuất Q&A: {str(e)}", type="negative")
+                ui.notify(get_text(self.language, "export_qa_error", "Error exporting Q&A: {error}", error=str(e)), type="negative")
 
     async def handle_search(self):
         try:
@@ -652,40 +835,40 @@ class TrainingComponent:
             self.qa_list_container.clear()
             with self.qa_list_container:
                 if not data:
-                    ui.label("⚠️ Không tìm thấy Q&A phù hợp").classes("text-gray-500 italic")
+                    ui.label(get_text(self.language, "no_qa_found", "⚠️ No matching Q&A found")).classes("text-gray-500 italic")
                 else:
                     for row in data:
                         with ui.card().classes("w-full mb-2 p-4"):
-                            ui.label(f"Câu hỏi: {row['question']}").classes("font-bold")
-                            ui.label(f"Trả lời: {row['answer']}")
-                            ui.label(f"Danh mục: {row['category']}")
-                            ui.label(f"Người tạo: {row['created_by']}")
-                            ui.label(f"Thời gian tạo: {row['created_at']}")
+                            ui.label(f"{get_text(self.language, 'question_label', 'Question')}: {row['question']}").classes("font-bold")
+                            ui.label(f"{get_text(self.language, 'answer_label', 'Answer')}: {row['answer']}")
+                            ui.label(f"{get_text(self.language, 'category_label', 'Category')}: {row['category']}")
+                            ui.label(f"{get_text(self.language, 'created_by_label', 'Created by')}: {row['created_by']}")
+                            ui.label(f"{get_text(self.language, 'created_at_label', 'Created at')}: {row['created_at']}")
                             with ui.row():
-                                ui.button("Sửa", on_click=lambda r=row: self.handle_edit(r)).classes("bg-blue-600 text-white hover:bg-blue-700 mr-2")
-                                ui.button("Xóa", on_click=lambda r=row: self.delete_row(r)).classes("bg-red-600 text-white hover:bg-red-700")
+                                ui.button(get_text(self.language, "edit_button", "Edit"), on_click=lambda r=row: self.handle_edit(r)).classes("bg-blue-600 text-white hover:bg-blue-700 mr-2")
+                                ui.button(get_text(self.language, "delete_button", "Delete"), on_click=lambda r=row: self.delete_row(r)).classes("bg-red-600 text-white hover:bg-red-700")
             if context.client.has_socket_connection:
                 ui.update()
-                ui.notify(f"Tìm thấy {len(data)} kết quả", type="positive")
+                ui.notify(get_text(self.language, "search_results", "Found {count} results", count=len(data)), type="positive")
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi tìm kiếm Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error searching Q&A: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi tìm kiếm Q&A: {str(e)}", type="negative")
+                ui.notify(get_text(self.language, "search_qa_error", "Error searching Q&A: {error}", error=str(e)), type="negative")
 
     async def handle_json_submit(self):
         async with self.db_lock:
             try:
                 qa_list = json.loads(self.json_input.value)
                 if not isinstance(qa_list, list):
-                    logger.error(f"{self.username}: JSON không phải danh sách")
+                    logger.error(f"{self.username}: JSON is not a list")
                     if context.client.has_socket_connection:
-                        ui.notify("JSON phải là danh sách", type="negative")
+                        ui.notify(get_text(self.language, "invalid_json_list", "JSON must be a list"), type="negative")
                     return
                 valid_qa_list = await self.process_qa_list(qa_list, "JSON input")
                 if not valid_qa_list:
-                    logger.error(f"{self.username}: Không có bản ghi Q&A hợp lệ")
+                    logger.error(f"{self.username}: No valid Q&A records")
                     if context.client.has_socket_connection:
-                        ui.notify("Không có bản ghi Q&A hợp lệ", type="negative")
+                        ui.notify(get_text(self.language, "no_valid_qa", "No valid Q&A records"), type="negative")
                     return
                 async def progress_callback(progress: float):
                     async with self.state_lock:
@@ -699,7 +882,7 @@ class TrainingComponent:
                     )
                     if context.client.has_socket_connection:
                         progress.delete()
-                if self._handle_result_error(result, "nhập Q&A từ JSON"):
+                if self._handle_result_error(result, get_text(self.language, "import_json_action", "import Q&A from JSON")):
                     return
                 async with self.log_lock:
                     await self.core.log_sync_action(
@@ -715,15 +898,15 @@ class TrainingComponent:
                     )
                 await self.update_qa_records()
                 if context.client.has_socket_connection:
-                    ui.notify(f"Đã nhập {len(valid_qa_list)} Q&A", type="positive")
+                    ui.notify(get_text(self.language, "imported_qa", "Imported {count} Q&A", count=len(valid_qa_list)), type="positive")
             except json.JSONDecodeError as e:
-                logger.error(f"{self.username}: JSON không hợp lệ: {str(e)}")
+                logger.error(f"{self.username}: Invalid JSON: {str(e)}")
                 if context.client.has_socket_connection:
-                    ui.notify(f"JSON không hợp lệ: {str(e)}", type="negative")
+                    ui.notify(get_text(self.language, "invalid_json", "Invalid JSON: {error}", error=str(e)), type="negative")
             except Exception as e:
-                logger.error(f"{self.username}: Lỗi nhập JSON Q&A: {str(e)}", exc_info=True)
+                logger.error(f"{self.username}: Error importing JSON Q&A: {str(e)}", exc_info=True)
                 if context.client.has_socket_connection:
-                    ui.notify(f"Lỗi nhập JSON Q&A: {str(e)}", type="negative")
+                    ui.notify(get_text(self.language, "import_json_error", "Error importing JSON Q&A: {error}", error=str(e)), type="negative")
 
     async def handle_file_upload(self, e):
         async with self.db_lock:
@@ -731,7 +914,7 @@ class TrainingComponent:
                 content = e.content.read()
                 if len(content) > Config.MAX_UPLOAD_SIZE:
                     if context.client.has_socket_connection:
-                        ui.notify("File quá lớn", type="negative")
+                        ui.notify(get_text(self.language, "file_too_large", "File too large"), type="negative")
                     return
                 if e.name.endswith('.json'):
                     qa_list = json.loads(content.decode())
@@ -748,12 +931,12 @@ class TrainingComponent:
                     ]
                 else:
                     if context.client.has_socket_connection:
-                        ui.notify("Chỉ chấp nhận JSON hoặc CSV", type="negative")
+                        ui.notify(get_text(self.language, "unsupported_file_format", "Only JSON or CSV accepted"), type="negative")
                     return
                 valid_qa_list = await self.process_qa_list(qa_list, f"file {e.name}")
                 if not valid_qa_list:
                     if context.client.has_socket_connection:
-                        ui.notify("Không có bản ghi Q&A hợp lệ", type="negative")
+                        ui.notify(get_text(self.language, "no_valid_qa", "No valid Q&A records"), type="negative")
                     return
                 async def progress_callback(progress: float):
                     async with self.state_lock:
@@ -767,7 +950,7 @@ class TrainingComponent:
                     )
                     if context.client.has_socket_connection:
                         progress.delete()
-                if self._handle_result_error(result, "nhập Q&A từ file"):
+                if self._handle_result_error(result, get_text(self.language, "import_file_action", "import Q&A from file")):
                     return
                 async with self.log_lock:
                     await self.core.log_sync_action(
@@ -783,32 +966,30 @@ class TrainingComponent:
                     )
                 await self.update_qa_records()
                 if context.client.has_socket_connection:
-                    ui.notify(f"Đã nhập {len(valid_qa_list)} Q&A từ file", type="positive")
+                    ui.notify(get_text(self.language, "imported_qa_file", "Imported {count} Q&A from file", count=len(valid_qa_list)), type="positive")
             except Exception as e:
-                logger.error(f"{self.username}: Lỗi nhập Q&A từ file: {str(e)}", exc_info=True)
+                logger.error(f"{self.username}: Error importing Q&A from file: {str(e)}", exc_info=True)
                 if context.client.has_socket_connection:
-                    ui.notify(f"Lỗi nhập Q&A từ file: {str(e)}", type="negative")
+                    ui.notify(get_text(self.language, "import_file_error", "Error importing Q&A from file: {error}", error=str(e)), type="negative")
 
-    
     async def process_qa_list(self, qa_list: List[Dict], source: str) -> List[Dict]:
         valid_qa_list = []
         current_time = int(time.time())
-        async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:  # Check duplicates batch
+        async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:
             for qa in qa_list:
                 if "question" not in qa or "answer" not in qa:
-                    logger.error(f"{self.username}: Q&A thiếu question hoặc answer từ {source}")
+                    logger.error(f"{self.username}: Q&A missing question or answer from {source}")
                     continue
-                qa["category"] = sanitize_field_name(qa.get("category", "chat"))
+                qa["category"] = sanitize_field_name(qa.get("category", get_text(self.language, "category_chat", "chat")))
                 if "created_by" not in qa:
                     qa["created_by"] = self.username
-                # Force convert created_at và timestamp thành int
                 try:
                     if "created_at" not in qa or not qa["created_at"]:
                         qa["created_at"] = current_time
                     else:
                         qa["created_at"] = int(float(qa["created_at"]))
                 except (ValueError, TypeError):
-                    logger.warning(f"{self.username}: Invalid created_at '{qa.get('created_at', 'None')}' từ {source}, dùng default {current_time}")
+                    logger.warning(f"{self.username}: Invalid created_at '{qa.get('created_at', 'None')}' from {source}, using default {current_time}")
                     qa["created_at"] = current_time
                 
                 try:
@@ -817,41 +998,36 @@ class TrainingComponent:
                     else:
                         qa["timestamp"] = int(float(qa["timestamp"]))
                 except (ValueError, TypeError):
-                    logger.warning(f"{self.username}: Invalid timestamp '{qa.get('timestamp', 'None')}' từ {source}, dùng default {current_time}")
+                    logger.warning(f"{self.username}: Invalid timestamp '{qa.get('timestamp', 'None')}' from {source}, using default {current_time}")
                     qa["timestamp"] = current_time
                 
                 if len(json.dumps(qa).encode()) > Config.MAX_UPLOAD_SIZE:
-                    logger.error(f"{self.username}: Q&A {qa['question']} vượt quá {Config.MAX_UPLOAD_SIZE} bytes từ {source}")
+                    logger.error(f"{self.username}: Q&A {qa['question']} exceeds {Config.MAX_UPLOAD_SIZE} bytes from {source}")
                     continue
                 
-                # Generate ID nếu missing hoặc rỗng
                 if "id" not in qa or not qa["id"]:
                     qa["id"] = str(uuid.uuid4())
                 
-                # Fix: Check duplicate (question + answer + created_by)
                 try:
                     async with conn.execute(
                         'SELECT id FROM "qa_data" WHERE question = ? AND answer = ? AND created_by = ?',
                         (qa["question"], qa["answer"], self.username)
                     ) as cursor:
                         if await cursor.fetchone():
-                            logger.warning(f"{self.username}: Skip duplicate Q&A '{qa['question'][:50]}...' từ {source}")
+                            logger.warning(f"{self.username}: Skipping duplicate Q&A '{qa['question'][:50]}...' from {source}")
                             continue
                 except Exception as dup_error:
-                    logger.warning(f"{self.username}: Error check duplicate for '{qa['question'][:50]}...': {str(dup_error)}, proceed anyway")
+                    logger.warning(f"{self.username}: Error checking duplicate for '{qa['question'][:50]}...': {str(dup_error)}, proceeding anyway")
                 
                 valid_qa_list.append(qa)
         return valid_qa_list
 
-
-    
-    
     async def handle_edit(self, row: Dict):
         try:
             if not self.client_state.get("session_token"):
                 if not await self.refresh_session_token():
                     if context.client.has_socket_connection:
-                        ui.notify("Lỗi: Không thể làm mới session_token", type="negative")
+                        ui.notify(get_text(self.language, "invalid_session", "Error: Failed to refresh session_token"), type="negative")
                     return
             session_token = self.client_state.get("session_token", "")
             for field_name in ["id", "question", "answer", "category"]:
@@ -861,29 +1037,29 @@ class TrainingComponent:
                 await self.qa_form.set_data(row)
                 self.client_state["is_editing"] = True
             if context.client.has_socket_connection:
-                ui.notify("Đã điền dữ liệu để chỉnh sửa Q&A", type="positive")
+                ui.notify(get_text(self.language, "edit_qa_filled", "Filled data for editing Q&A"), type="positive")
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi điền dữ liệu chỉnh sửa Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error filling edit Q&A data: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi điền dữ liệu chỉnh sửa Q&A: {str(e)}", type="negative")
-                
+                ui.notify(get_text(self.language, "edit_qa_error", "Error filling edit Q&A data: {error}", error=str(e)), type="negative")
+
     async def cancel_edit(self):
         try:
             if self.qa_form:
                 await self.qa_form.reset()
             self.client_state["is_editing"] = False
             if context.client.has_socket_connection:
-                ui.notify("Đã hủy chỉnh sửa Q&A", type="positive")
+                ui.notify(get_text(self.language, "cancel_edit_qa", "Cancelled Q&A edit"), type="positive")
             await self.update_qa_records()
         except Exception as e:
-            logger.error(f"{self.username}: Lỗi hủy chỉnh sửa Q&A: {str(e)}", exc_info=True)
+            logger.error(f"{self.username}: Error cancelling Q&A edit: {str(e)}", exc_info=True)
             if context.client.has_socket_connection:
-                ui.notify(f"Lỗi hủy chỉnh sửa Q&A: {str(e)}", type="negative")
+                ui.notify(get_text(self.language, "cancel_edit_error", "Error cancelling Q&A edit: {error}", error=str(e)), type="negative")
 
     async def handle_qa_submit(self, data: Dict):
         async with self.db_lock:
             try:
-                data["category"] = sanitize_field_name(data.get("category", "chat"))
+                data["category"] = sanitize_field_name(data.get("category", get_text(self.language, "category_chat", "chat")))
                 data["created_by"] = self.username
                 data["created_at"] = int(time.time())
                 data["timestamp"] = int(time.time())
@@ -893,8 +1069,8 @@ class TrainingComponent:
 
                 if len(json.dumps(data).encode()) > Config.MAX_UPLOAD_SIZE:
                     if context.client.has_socket_connection:
-                        ui.notify("Dữ liệu Q&A quá lớn", type="negative")
-                    return {"success": False, "error": "Dữ liệu Q&A quá lớn"}
+                        ui.notify(get_text(self.language, "qa_too_large", "Q&A data too large"), type="negative")
+                    return {"success": False, "error": get_text(self.language, "qa_too_large", "Q&A data too large")}
 
                 async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:
                     async with conn.execute(
@@ -905,12 +1081,12 @@ class TrainingComponent:
                         if existing:
                             logger.warning(f"{self.username}: Duplicate Q&A detected (existing ID: {existing[0]}), skipping insert")
                             if context.client.has_socket_connection:
-                                ui.notify("Q&A này đã tồn tại, bỏ qua để tránh duplicate", type="warning")
-                            return {"success": False, "error": "Q&A đã tồn tại"}
+                                ui.notify(get_text(self.language, "duplicate_qa", "Q&A already exists, skipped to avoid duplicate"), type="warning")
+                            return {"success": False, "error": get_text(self.language, "duplicate_qa", "Q&A already exists")}
 
                 record_id = data["id"]
                 is_update = False
-                logger.debug(f"{self.username}: record_id trước khi xử lý: {record_id}")
+                logger.debug(f"{self.username}: record_id before processing: {record_id}")
                 if record_id:
                     async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=60.0) as conn:
                         async with conn.execute(
@@ -922,7 +1098,7 @@ class TrainingComponent:
                                 is_update = True
                                 action = "UPDATE_QA"
                             else:
-                                logger.warning(f"{self.username}: ID {record_id} không tồn tại hoặc không thuộc user, fallback về create mới")
+                                logger.warning(f"{self.username}: ID {record_id} does not exist or not owned by user, falling back to create")
                                 data["id"] = str(uuid.uuid4())
                                 result = await self.core.create_record("qa_data", data, self.username)
                                 action = "CREATE_QA"
@@ -931,7 +1107,7 @@ class TrainingComponent:
                     action = "CREATE_QA"
 
                 if isinstance(result, dict) and "error" in result:
-                    self._handle_result_error(result, "lưu Q&A")
+                    self._handle_result_error(result, get_text(self.language, "save_qa_action", "save Q&A"))
                     return {"success": False, "error": result["error"]}
 
                 final_id = result.get("id", str(uuid.uuid4())) if isinstance(result, dict) else str(uuid.uuid4())
@@ -944,19 +1120,18 @@ class TrainingComponent:
                         username=self.username
                     )
 
-                # Reset form
                 if self.qa_form:
                     await self.qa_form.reset()
                 self.client_state["is_editing"] = False
 
                 await self.update_qa_records()
                 if context.client.has_socket_connection:
-                    ui.notify("Đã lưu Q&A thành công" + (" (cập nhật)" if is_update else " (mới)"), type="positive")
-                return {"success": True, "message": "Đã lưu Q&A"}
+                    ui.notify(get_text(self.language, "saved_qa", "Saved Q&A successfully{update}", update=" (updated)" if is_update else " (new)"), type="positive")
+                return {"success": True, "message": get_text(self.language, "saved_qa", "Saved Q&A")}
             except Exception as e:
-                logger.error(f"{self.username}: Lỗi lưu Q&A: {str(e)}", exc_info=True)
+                logger.error(f"{self.username}: Error saving Q&A: {str(e)}", exc_info=True)
                 if context.client.has_socket_connection:
-                    ui.notify(f"Lỗi lưu Q&A: {str(e)}", type="negative")
+                    ui.notify(get_text(self.language, "save_qa_error", "Error saving Q&A: {error}", error=str(e)), type="negative")
                 return {"success": False, "error": str(e)}
 
-                
+
