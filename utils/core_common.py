@@ -10,8 +10,24 @@ import time
 import aiosqlite
 import traceback
 from config import Config
+from nicegui import ui, context
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = get_logger("CoreCommon")
+
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1.0))
+async def safe_ui_update():
+    logger.debug("Thử gọi safe_ui_update")
+    try:
+        if context.client.has_socket_connection:
+            ui.update()
+            logger.debug("Cập nhật giao diện thành công")
+        else:
+            logger.warning("Không thể cập nhật giao diện vì client đã disconnect")
+    except Exception as e:
+        logger.error(f"Lỗi khi cập nhật giao diện: {str(e)}", exc_info=True)
+
+# ... (các hàm khác như sanitize_field_name, validate_name, v.v. giữ nguyên) ...
 
 def sanitize_field_name(field: str) -> str:
     """Chuẩn hóa tên field, chỉ giữ chữ thường, số và dấu gạch dưới."""
@@ -79,9 +95,27 @@ async def check_last_sync(core, username: str) -> dict:
             ) as cursor:
                 last_sync = await cursor.fetchone()
                 current_time = int(time.time())
-                if last_sync and last_sync[0] and (current_time - last_sync[0]) < Config.SYNC_MIN_INTERVAL:
-                    return {"success": False, "message": f"Chờ {Config.SYNC_MIN_INTERVAL} giây"}
-                return {"success": True, "message": "Có thể đồng bộ"}
+                if last_sync and last_sync[0]:
+                    # Định dạng thời gian đồng bộ cuối cùng
+                    last_sync_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_sync[0]))
+                    # Kiểm tra khoảng thời gian tối thiểu giữa các lần đồng bộ
+                    if (current_time - last_sync[0]) < Config.SYNC_MIN_INTERVAL:
+                        return {
+                            "success": False,
+                            "message": f"Chờ {Config.SYNC_MIN_INTERVAL} giây",
+                            "last_sync": last_sync_time
+                        }
+                    return {
+                        "success": True,
+                        "message": "Có thể đồng bộ",
+                        "last_sync": last_sync_time
+                    }
+                # Nếu không có bản ghi đồng bộ
+                return {
+                    "success": True,
+                    "message": "Có thể đồng bộ",
+                    "last_sync": "Chưa đồng bộ"
+                }
     except Exception as e:
         error_msg = f"Lỗi kiểm tra thời gian đồng bộ cho {username}: {str(e)}"
         has_admin_access = False
@@ -92,4 +126,8 @@ async def check_last_sync(core, username: str) -> dict:
         if has_admin_access:
             error_msg += f"\nChi tiết: {traceback.format_exc()}"
         logger.error(error_msg)
-        return {"success": False, "message": error_msg}
+        return {
+            "success": False,
+            "message": error_msg,
+            "last_sync": "Chưa đồng bộ"
+        }
