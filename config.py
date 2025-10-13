@@ -18,6 +18,30 @@ class Config:
     SQLITE_DB_PATH = os.environ.get("SQLITE_DB_PATH", "/tmp/app.db")
     MAX_SQLITE_SIZE = 100_000_000
 
+    # Thêm cấu hình system prompt
+    
+    
+    SYSTEM_PROMPTS = {
+        "vi": (
+            "Bạn là Groq. Trả lời chính xác, ngắn gọn, hữu ích bằng tiếng Việt. "
+            
+            "Kết hợp thông tin từ lịch sử chat để bổ sung ngữ cảnh, ưu tiên các câu trả lời trước có chứa chi tiết cụ thể "
+            "(như số tài khoản, ngày tháng, tên riêng). "
+            "Nếu không có QA Context hoặc thông tin liên quan trong lịch sử chat, yêu cầu người dùng cung cấp thông tin cụ thể hơn "
+            "(như tên ngân hàng, số tài khoản) hoặc trả lời dựa trên kiến thức chung nếu câu hỏi cho phép. "
+            "Luôn ưu tiên QA Context, sau đó là lịch sử chat, trước khi sử dụng kiến thức bên ngoài."
+        ),
+        "en": (
+            "You are Groq. Provide accurate, concise, and helpful responses in English. "
+            
+            "Combine information from chat history to supplement context, prioritizing previous responses with specific details "
+            "(e.g., account numbers, dates, names). "
+            "If no QA Context or relevant information is found in chat history, request the user to provide more specific details "
+            "(e.g., bank name, account number) or respond based on general knowledge if the question allows. "
+            "Always prioritize QA Context, followed by chat history, before using external knowledge."
+        ),
+    }
+    
     # Cấu hình cho combobox và mặc định
     SHOW_MODEL_COMBOBOX = False
     DEFAULT_MODEL = "llama-3.3-70b-versatile"
@@ -50,7 +74,7 @@ class Config:
     QA_SEARCH_THRESHOLD = 0.8
     TRAINING_SEARCH_THRESHOLD = 0.8
     QA_HISTORY_LIMIT = 10
-    CHAT_HISTORY_LIMIT = 50
+    CHAT_HISTORY_LIMIT = 500
 
     # Danh sách bảng
     SPECIAL_TABLES = {"collection_schemas", "users", "sessions", "client_states"}
@@ -59,7 +83,8 @@ class Config:
 
     # Cấu hình AI (Grok)
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-
+    GROK_VISION_ENABLED = False
+    
     # Cấu hình bảo mật
     ALLOWED_FILE_EXTENSIONS = {".txt", ".pdf", ".jpg", ".png"}
     MAX_UPLOAD_SIZE = 5_000_000

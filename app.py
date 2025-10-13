@@ -28,6 +28,9 @@ fastapi_app = FastAPI(title=Config.APP_NAME)
 core = Core()
 ui_manager = UIManager(core)
 
+# Ở đầu file app.py
+CHAT_COMPONENTS = {}
+
 # Pydantic models
 class LoginData(BaseModel):
     username: str
@@ -105,6 +108,68 @@ def set_auth_cookies_js(session_token: str, username: str):
         window.location.href = '/dashboard';
     """)
 
+
+
+@app.post("/update-ui")
+async def update_ui(request: Request):
+    try:
+        data = await request.json()
+        client_id = data.get("client_id")
+        if not client_id:
+            logger.error("Missing client_id in update-ui request")
+            return JSONResponse({"error": "Missing client_id"}, status_code=400)
+
+        chat_component = CHAT_COMPONENTS.get(client_id)
+        if not chat_component:
+            logger.error(f"No ChatComponent found for client_id={client_id}")
+            return JSONResponse({"error": "No ChatComponent found"}, status_code=500)
+
+        username = chat_component.client_state.get("username", "")
+        async def safe_update():
+            with chat_component.messages_container:
+                await chat_component.update_messages()
+                await chat_component.scroll_to_bottom()
+
+        await safe_update()  # Thay ui.run_safe bằng gọi trực tiếp
+        logger.info(f"{username}: UI updated successfully for client_id={client_id}")
+        return JSONResponse({"success": "UI updated"})
+
+    except Exception as e:
+        logger.error(f"Error in update-ui: {str(e)}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/typing-complete/{message_id}")
+async def typing_complete(message_id: str, request: Request):
+    try:
+        data = await request.json()
+        response = data.get("response")
+        if not response:
+            logger.error(f"Không nhận được response từ JavaScript cho message_id={message_id}")
+            return JSONResponse({"error": "Không nhận được response"}, status_code=400)
+
+        client_id = data.get("client_id")
+        chat_component = CHAT_COMPONENTS.get(client_id)
+        if not chat_component:
+            logger.error(f"Không tìm thấy ChatComponent cho message_id={message_id}, client_id={client_id}")
+            return JSONResponse({"error": "Không tìm thấy ChatComponent"}, status_code=500)
+
+        username = chat_component.client_state.get("username", "")
+        # Cập nhật nội dung tin nhắn trong self.messages
+        for msg in chat_component.messages:
+            if msg["id"] == message_id:
+                msg["content"] = response
+                break
+        else:
+            logger.error(f"Không tìm thấy tin nhắn với message_id={message_id} trong self.messages")
+            return JSONResponse({"error": "Không tìm thấy tin nhắn"}, status_code=400)
+
+        logger.info(f"{username}: Hoàn tất hiệu ứng đánh máy cho message_id={message_id}")
+        return JSONResponse({"success": "Cập nhật thành công"})
+
+    except Exception as e:
+        logger.error(f"Lỗi xử lý typing-complete cho message_id={message_id}: {str(e)}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+        
 async def handle_error(e: Exception, username: str, action: str, core: Core) -> dict:
     error_msg = f"Lỗi {action}: {str(e)}"
     if await core.sqlite_handler.has_permission(username, "admin_access"):
@@ -179,7 +244,7 @@ async def load_tabs(ui_manager: UIManager, core: Core, username: str, client_sta
             logger.warning(f"{username}: Không tìm thấy file tab_*.py trong thư mục uiapp/")
             return
         is_admin = await core.sqlite_handler.has_permission(username, "admin_access")
-        sensitive_tabs = {"tab_chat"}
+        sensitive_tabs = {"tab_training"}  # Chỉ tab_training yêu cầu quyền admin
         for file_path in tab_files:
             try:
                 module_name = file_path.stem
@@ -221,7 +286,8 @@ async def load_tabs(ui_manager: UIManager, core: Core, username: str, client_sta
                             "Database": "database",
                             "Management": "settings",
                             "Interface": "api",
-                            "Faq": "help"
+                            "Faq": "help",
+                            "Training": "school"
                         }.get(tab_name, "extension")
                         ui_manager.register_tab(tab_name, render_func, update_func, icon)
                         logger.info(f"{username}: Đã đăng ký tab {tab_name} với icon {icon}")
@@ -233,7 +299,7 @@ async def load_tabs(ui_manager: UIManager, core: Core, username: str, client_sta
                     logger.warning(f"Module {module_name} không có hàm create_tab")
             except Exception as e:
                 logger.error(f"{username}: Lỗi tải tab {file_path}: {str(e)}", exc_info=True)
-
+                
 @ui.page("/auth")
 async def auth_page(request: Request):
     async def handle_login(data: dict, progress_callback: Optional[Callable] = None):
@@ -531,7 +597,6 @@ async def dashboard(request: Request):
             session_token, username, client_state = await handle_session(request, core)
             logger.info(f"{username}: handle_session took {time.time() - start_time} seconds")
 
-            # Bỏ kiểm tra Firestore để giảm thời gian
             client_state["firestore_available"] = False  # Giả sử Firestore không cần thiết
             logger.debug(f"{username}: Bỏ qua kiểm tra Firestore để tối ưu thời gian")
 
@@ -589,11 +654,13 @@ async def dashboard(request: Request):
                     error_result = await handle_error(e, username, f"chọn tab {tab_name}", core)
                     ui.notify(error_result["error"], type="negative")
 
+            # Thêm client_state vào khởi tạo DashboardLayout
             dashboard_layout = DashboardLayout(
+                core=core,
                 username=username,
+                client_state=client_state,  # Thêm client_state
                 is_admin=is_admin,
                 tabs={name: {"name": tab["name"], "icon": tab["icon"]} for name, tab in ui_manager.registered_tabs.items()},
-                core=core,
                 on_logout=handle_logout,
                 on_tab_select=handle_tab_select
             )
@@ -632,7 +699,7 @@ async def dashboard(request: Request):
         error_result = await handle_error(e, username, "xử lý dashboard", core)
         ui.notify(f"Lỗi hệ thống: {error_result['error']}", type="negative")
         return JSONResponse({"error": "Lỗi hệ thống"}, status_code=200)
-
+        
 @fastapi_app.post("/api/login")
 async def api_login(data: LoginData, response: Response, request: Request):
     try:
@@ -739,34 +806,57 @@ async def api_register(data: RegisterData, response: Response, request: Request)
 
 
 async def update_and_save_client_state(core: Core, session_token: str, username: str, firestore_available: bool) -> dict:
-    async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
-        async with conn.execute(
-            "SELECT username FROM sessions WHERE session_token = ?",
-            (session_token,)
-        ) as cursor:
-            session_row = await cursor.fetchone()
-            if session_row and session_row[0] != username:
-                logger.warning(f"Username mismatch: expected {username}, got {session_row[0]} in sessions")
-                username = session_row[0]  # Ép đúng username từ sessions
-    client_state = await core.get_client_state(session_token, username)
-    if client_state.get("username") and client_state["username"] != username:
-        logger.warning(f"Username mismatch: client_state={client_state['username']}, expected={username}")
-        client_state["username"] = username  # Ép đúng username
-    client_state.update({
-        "authenticated": True,
-        "session_token": session_token,
-        "username": username,
-        "firestore_available": firestore_available,
-        "timestamp": int(time.time()),
-        "role": client_state.get("role", "user"),
-        "login_attempts": client_state.get("login_attempts", 0),
-        "selected_tab": client_state.get("selected_tab", "Chat"),
-        "registered_tabs": client_state.get("registered_tabs", [])
-    })
-    sanitized_state = sanitize_state(client_state)
-    if len(json.dumps(sanitized_state).encode()) > 1_048_576:
-        logger.error(f"Kích thước client_state vượt quá 1MB cho {username}")
-        return {"success": False, "error": "Trạng thái phiên quá lớn"}
-    await core.save_client_state(session_token, sanitized_state)
-    return {"success": True, "client_state": sanitized_state}
+    
+    try:
+        async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=30.0) as conn:
+            # Kiểm tra session
+            async with conn.execute(
+                "SELECT username FROM sessions WHERE session_token = ?",
+                (session_token,)
+            ) as cursor:
+                session_row = await cursor.fetchone()
+                if session_row and session_row[0] != username:
+                    logger.warning(f"Username mismatch: expected {username}, got {session_row[0]} in sessions")
+                    username = session_row[0]
 
+            # Lấy role từ bảng users
+            async with conn.execute(
+                "SELECT role FROM users WHERE username = ?",
+                (username,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                role = row[0] if row else "user"
+
+            # Lấy client_state hiện tại
+            client_state = await core.get_client_state(session_token, username)
+            if client_state.get("username") and client_state["username"] != username:
+                logger.warning(f"Username mismatch: client_state={client_state['username']}, expected={username}")
+                client_state["username"] = username
+
+            # Lấy language từ client_state hoặc app.storage.user
+            language = client_state.get("language", app.storage.user.get("language", "vi"))
+
+            client_state.update({
+                "authenticated": True,
+                "session_token": session_token,
+                "username": username,
+                "firestore_available": firestore_available,
+                "timestamp": int(time.time()),
+                "role": role,
+                "language": language,
+                "login_attempts": client_state.get("login_attempts", 0),
+                "selected_tab": client_state.get("selected_tab", "Chat"),
+                "registered_tabs": client_state.get("registered_tabs", [])
+            })
+            sanitized_state = sanitize_state(client_state)
+            if len(json.dumps(sanitized_state).encode()) > 1_048_576:
+                logger.error(f"Kích thước client_state vượt quá 1MB cho {username}")
+                return {"success": False, "error": "Trạng thái phiên quá lớn"}
+            await core.save_client_state(session_token, sanitized_state)
+            app.storage.user["language"] = sanitized_state["language"]
+            logger.info(f"Đã lưu client_state với language={sanitized_state['language']} cho {username}")
+            return {"success": True, "client_state": sanitized_state}
+    except Exception as e:
+        logger.error(f"Lỗi khi lưu client_state cho {username}: {str(e)}", exc_info=True)
+        return {"success": False, "error": str(e)}
+        

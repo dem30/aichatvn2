@@ -459,6 +459,7 @@ class SQLiteHandler:
             self.logger.error(f"Timeout khi khởi tạo SQLite: {str(e)}")
             raise DatabaseError(f"Timeout khi khởi tạo SQLite: {str(e)}")
 
+    
     async def register_user(self, username: str, password: str, bot_password: Optional[str] = None) -> Dict:
         try:
             async with asyncio.timeout(60):  # Timeout 1 phút
@@ -585,7 +586,6 @@ class SQLiteHandler:
             self.logger.error(f"Lỗi đăng ký cho {username}: {str(e)}", exc_info=True)
             return {"error": f"Lỗi đăng ký: {str(e)}"}
             
-    
     async def get_client_state(self, session_token: str, username: str) -> Dict:
         """Lấy trạng thái phiên của người dùng từ cơ sở dữ liệu SQLite.
 
@@ -1951,39 +1951,6 @@ class FirestoreHandler:
             self.db = None
 
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type(Exception)
-    )
-    def _initialize_firestore(self):
-        if AsyncClient is None or Credentials is None:
-            self.logger.warning("Thư viện Google Cloud Firestore không được cài đặt, Firestore không khả dụng")
-            return
-        
-        try:
-            if hasattr(Config, "FIRESTORE_CREDENTIALS") and Config.FIRESTORE_CREDENTIALS:
-                if isinstance(Config.FIRESTORE_CREDENTIALS, str):
-                    cred_dict = json.loads(Config.FIRESTORE_CREDENTIALS)
-                else:
-                    cred_dict = Config.FIRESTORE_CREDENTIALS
-                
-                if "project_id" not in cred_dict:
-                    self.logger.error("Missing project_id in FIRESTORE_CREDENTIALS")
-                    return
-                
-                credentials = Credentials.from_service_account_info(cred_dict)
-                self.db = AsyncClient(credentials=credentials, project=cred_dict.get("project_id"))
-                self.firestore_available = True
-                self.logger.info("Firestore đã khởi tạo thành công")
-            else:
-                self.logger.error("FIRESTORE_CREDENTIALS không được cấu hình")
-                self.firestore_available = False
-                self.db = None
-        except Exception as e:
-            self.logger.error(f"Lỗi khởi tạo Firestore: {str(e)}", exc_info=True)
-            self.firestore_available = False
-            self.db = None
 
     async def sync_firestore_batch(self, batch, username: str) -> int:
         """Đồng bộ một batch bản ghi lên Firestore."""
@@ -2000,6 +1967,10 @@ class FirestoreHandler:
 
     
 
+    
+    
+    
+    
     
     async def sync_to_sqlite(
         self,
@@ -2019,15 +1990,36 @@ class FirestoreHandler:
                 return {"error": "Firestore không khả dụng", "synced_records": 0}
 
             check_disk_space()
-            async with asyncio.timeout(300):  # Timeout 5 phút
+            async with asyncio.timeout(300):
                 async with aiosqlite.connect(Config.SQLITE_DB_PATH, timeout=30.0) as conn:
+                    # Xóa các bản ghi DELETE trong sync_log cho chat_messages của username
+                    await conn.execute(
+                        """
+                        DELETE FROM sync_log 
+                        WHERE table_name = ? 
+                        AND action = 'DELETE' 
+                        AND details LIKE ?
+                        """,
+                        ("chat_messages", f'%{{"username": "{username}"%'),
+                    )
+                    await conn.commit()
+                    self.logger.info(
+                        f"{username}: Đã xóa các bản ghi DELETE trong sync_log cho chat_messages"
+                    )
+
+                    # Lấy thời gian đồng bộ lần cuối
                     async with conn.execute(
                         "SELECT MAX(timestamp) FROM sync_log WHERE action = 'sync_to_sqlite'"
                     ) as cursor:
                         last_sync = (await cursor.fetchone())[0] or 0
-                        self.logger.info(f"{username}: Thời gian đồng bộ xuống SQLite cuối cùng: {last_sync}")
+                        self.logger.info(
+                            f"{username}: Thời gian đồng bộ xuống SQLite cuối cùng: {last_sync}"
+                        )
 
-                    async with conn.execute("SELECT collection_name, fields FROM collection_schemas") as cursor:
+                    # Lấy schema local
+                    async with conn.execute(
+                        "SELECT collection_name, fields FROM collection_schemas"
+                    ) as cursor:
                         local_schemas = {
                             row[0]: self._deserialize_schema(row[1])
                             for row in await cursor.fetchall()
@@ -2037,12 +2029,19 @@ class FirestoreHandler:
                         schemas = {}
                         async for doc in self.db.collection("collection_schemas").stream():
                             doc_data = doc.to_dict()
-                            if isinstance(doc_data, dict) and "collection_name" in doc_data and "fields" in doc_data:
-                                schemas[doc_data["collection_name"]] = self._deserialize_schema(doc_data["fields"])
+                            if (
+                                isinstance(doc_data, dict)
+                                and "collection_name" in doc_data
+                                and "fields" in doc_data
+                            ):
+                                schemas[doc_data["collection_name"]] = self._deserialize_schema(
+                                    doc_data["fields"]
+                                )
                         return schemas
 
                     schemas = await retry_firestore_operation(get_firestore_schemas)
 
+                    # Lấy danh sách collections cần đồng bộ
                     collections = [coll.id async for coll in self.db.collections()]
                     if specific_collections:
                         collections = [coll for coll in collections if coll in specific_collections]
@@ -2052,15 +2051,19 @@ class FirestoreHandler:
                             if coll in Config.PROTECTED_TABLES or coll in Config.SPECIAL_TABLES
                         ]
                     else:
-                        collections = [coll for coll in collections if coll not in Config.PROTECTED_TABLES]
+                        collections = [
+                            coll for coll in collections if coll not in Config.PROTECTED_TABLES
+                        ]
+
                     collections = list(set(collections) | set(Config.SPECIAL_TABLES))
                     collections = [coll for coll in collections if coll not in Config.SYSTEM_TABLES]
+
                     self.logger.info(f"{username}: Đồng bộ các collection: {collections}")
 
                     if not collections:
                         self.logger.info(f"{username}: Không có collection nào để đồng bộ")
                         if progress_callback:
-                            await progress_callback(1.0)  # Hoàn thành ngay nếu không có dữ liệu
+                            await progress_callback(1.0)
                         return {"success": "Không có collection để đồng bộ", "synced_records": 0}
 
                     total_collections = len(collections)
@@ -2068,39 +2071,71 @@ class FirestoreHandler:
                     processed_records = 0
                     total_records = 0
 
-                    # Ước tính tổng số bản ghi để tính tiến trình chính xác hơn
+                    # Đếm tổng số bản ghi
                     for collection_name in collections:
                         query = self.db.collection(collection_name)
+                        if collection_name == "chat_messages":
+                            query = query.where(filter=FieldFilter("username", "==", username))
+                        elif collection_name == "qa_data":
+                            query = query.where(filter=FieldFilter("created_by", "==", username))
                         async for _ in query.stream():
                             total_records += 1
 
+                    # Đồng bộ từng collection
                     for collection_name in collections:
                         if not validate_name(collection_name):
-                            self.logger.warning(f"{username}: Tên collection {collection_name} không hợp lệ, bỏ qua")
+                            self.logger.warning(
+                                f"{username}: Tên collection {collection_name} không hợp lệ, bỏ qua"
+                            )
                             continue
 
                         self.logger.debug(f"{username}: Đồng bộ collection {collection_name}")
-                        firestore_schema = schemas.get(collection_name, {"id": "TEXT", "timestamp": "INTEGER"})
-                        local_schema = local_schemas.get(collection_name, {"id": "TEXT", "timestamp": "INTEGER"})
-                        merged_schema = self.validate_schema_compatibility(local_schema, firestore_schema)
+
+                        firestore_schema = schemas.get(
+                            collection_name, {"id": "TEXT", "timestamp": "INTEGER"}
+                        )
+                        local_schema = local_schemas.get(
+                            collection_name, {"id": "TEXT", "timestamp": "INTEGER"}
+                        )
+
+                        merged_schema = self.validate_schema_compatibility(
+                            local_schema, firestore_schema
+                        )
 
                         async with conn.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", 
-                            (collection_name,)
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                            (collection_name,),
                         ) as cursor:
                             exists = await cursor.fetchone()
+
                         if not exists:
-                            columns_def = [f'"{field}" {dtype}' for field, dtype in merged_schema.items()]
-                            await conn.execute(f'CREATE TABLE "{collection_name}" ({", ".join(columns_def)})')
-                            self.logger.info(f"{username}: Tạo bảng {collection_name} với schema: {merged_schema}")
+                            columns_def = [
+                                f'"{field}" {dtype}' for field, dtype in merged_schema.items()
+                            ]
+                            await conn.execute(
+                                f'CREATE TABLE "{collection_name}" ({", ".join(columns_def)})'
+                            )
+                            self.logger.info(
+                                f"{username}: Tạo bảng {collection_name} với schema: {merged_schema}"
+                            )
                         else:
-                            async with conn.execute(f'PRAGMA table_info("{collection_name}")') as cursor:
-                                existing_columns = {row[1]: row[2] for row in await cursor.fetchall()}
+                            async with conn.execute(
+                                f'PRAGMA table_info("{collection_name}")'
+                            ) as cursor:
+                                existing_columns = {
+                                    row[1]: row[2] for row in await cursor.fetchall()
+                                }
                             for field, dtype in merged_schema.items():
                                 if field not in existing_columns:
-                                    await conn.execute(f'ALTER TABLE "{collection_name}" ADD COLUMN "{field}" {dtype}')
-                                    self.logger.debug(f"{username}: Thêm cột {field} ({dtype}) vào {collection_name}")
+                                    await conn.execute(
+                                        f'ALTER TABLE "{collection_name}" '
+                                        f'ADD COLUMN "{field}" {dtype}'
+                                    )
+                                    self.logger.debug(
+                                        f"{username}: Thêm cột {field} ({dtype}) vào {collection_name}"
+                                    )
 
+                        # Cập nhật schema
                         schema_json = self._serialize_value(merged_schema)
                         query = (
                             "INSERT OR REPLACE INTO collection_schemas "
@@ -2110,7 +2145,7 @@ class FirestoreHandler:
                             hashlib.sha256(collection_name.encode()).hexdigest(),
                             collection_name,
                             schema_json,
-                            int(time.time())
+                            int(time.time()),
                         )
                         self._check_parameters(params, query)
                         await conn.execute(query, params)
@@ -2118,65 +2153,99 @@ class FirestoreHandler:
                         async def update_firestore_schema():
                             await self.db.collection("collection_schemas").document(
                                 hashlib.sha256(collection_name.encode()).hexdigest()
-                            ).set({
-                                "collection_name": collection_name,
-                                "fields": merged_schema,
-                                "timestamp": int(time.time())
-                            }, merge=True)
+                            ).set(
+                                {
+                                    "collection_name": collection_name,
+                                    "fields": merged_schema,
+                                    "timestamp": int(time.time()),
+                                },
+                                merge=True,
+                            )
                             return {"success": "Cập nhật schema Firestore thành công"}
 
                         await retry_firestore_operation(update_firestore_schema)
 
-                        async with conn.execute(f'SELECT COUNT(*) FROM "{collection_name}"') as cursor:
+                        # Kiểm tra bảng local
+                        async with conn.execute(
+                            f'SELECT COUNT(*) FROM "{collection_name}"'
+                        ) as cursor:
                             row_count = (await cursor.fetchone())[0]
                         is_empty = row_count == 0
-                        self.logger.debug(f"{username}: Bảng {collection_name} {'rỗng' if is_empty else f'có {row_count} bản ghi'}")
+                        self.logger.debug(
+                            f"{username}: Bảng {collection_name} "
+                            f'{"rỗng" if is_empty else f"có {row_count} bản ghi"}'
+                        )
 
                         async def fetch_firestore_records():
                             batch = []
                             query = self.db.collection(collection_name)
-                            if is_empty or collection_name in Config.SPECIAL_TABLES or collection_name in Config.PROTECTED_TABLES:
-                                self.logger.debug(f"{username}: Đồng bộ toàn bộ bản ghi cho {collection_name} (bảng rỗng hoặc đặc biệt)")
+                            if collection_name == "chat_messages":
+                                query = query.where(filter=FieldFilter("username", "==", username))
+                            elif collection_name == "qa_data":
+                                query = query.where(filter=FieldFilter("created_by", "==", username))
+                            elif (
+                                is_empty
+                                or collection_name in Config.SPECIAL_TABLES
+                                or collection_name in Config.PROTECTED_TABLES
+                            ):
+                                pass
                             else:
-                                query = query.where(filter=FieldFilter("timestamp", ">", last_sync))
-                                self.logger.debug(f"{username}: Đồng bộ bản ghi mới cho {collection_name} (timestamp > {last_sync})")
+                                query = query.where(
+                                    filter=FieldFilter("timestamp", ">", last_sync)
+                                )
+
                             async for doc in query.stream():
                                 doc_data = doc.to_dict()
                                 if not isinstance(doc_data, dict):
-                                    self.logger.warning(f"{username}: Dữ liệu Firestore không hợp lệ cho {collection_name}, bỏ qua")
                                     continue
                                 doc_data["id"] = doc.id
-                                doc_data["timestamp"] = doc_data.get("timestamp", int(time.time()))
+                                doc_data["timestamp"] = doc_data.get(
+                                    "timestamp", int(time.time())
+                                )
                                 valid_fields = [k for k in doc_data if k in merged_schema]
                                 if not valid_fields:
-                                    self.logger.warning(f"{username}: Không có trường hợp lệ để đồng bộ cho bản ghi {doc_data['id']} trong {collection_name}")
                                     continue
                                 columns = [f'"{sanitize_field_name(k)}"' for k in valid_fields]
                                 placeholders = ["?" for _ in valid_fields]
                                 values = [self._serialize_value(doc_data[k]) for k in valid_fields]
                                 batch.append((columns, placeholders, values, doc_data["id"]))
+
+                                # Tải file nếu có
+                                if collection_name == "chat_messages" and "file_url" in doc_data:
+                                    file_id = doc_data["file_url"].split("/")[-1]
+                                    file_path = os.path.join(
+                                        Config.CHAT_FILE_STORAGE_PATH, file_id
+                                    )
+                                    if not os.path.exists(file_path):
+                                        try:
+                                            await self.download_file_from_firestore(
+                                                doc_data["file_url"], file_path
+                                            )
+                                        except Exception as e:
+                                            self.logger.error(
+                                                f"{username}: Lỗi tải file {file_path}: {str(e)}"
+                                            )
                             return batch
 
                         batch = await retry_firestore_operation(fetch_firestore_records)
                         if not isinstance(batch, list):
-                            self.logger.error(f"{username}: Kết quả từ fetch_firestore_records không phải danh sách: {batch}")
                             continue
 
+                        # Chèn dữ liệu vào SQLite
                         if batch:
-                            for batch_item in batch:
-                                if not isinstance(batch_item, tuple) or len(batch_item) != 4:
-                                    self.logger.error(f"{username}: Batch item không hợp lệ cho {collection_name}: {batch_item}")
-                                    continue
-                                columns, placeholders, values, record_id = batch_item
+                            for columns, placeholders, values, record_id in batch:
                                 try:
                                     await conn.execute(
-                                        f'INSERT OR REPLACE INTO "{collection_name}" ({", ".join(columns)}) VALUES ({", ".join(placeholders)})',
-                                        values
+                                        f'INSERT OR REPLACE INTO "{collection_name}" '
+                                        f'({", ".join(columns)}) VALUES ({", ".join(placeholders)})',
+                                        values,
                                     )
                                     synced_records += 1
                                     processed_records += 1
+
                                     query = (
-                                        "INSERT INTO sync_log (id, table_name, record_id, action, timestamp, details) "
+                                        "INSERT INTO sync_log "
+                                        "(id, table_name, record_id, action, timestamp, details) "
                                         "VALUES (?, ?, ?, ?, ?, ?)"
                                     )
                                     params = (
@@ -2185,27 +2254,31 @@ class FirestoreHandler:
                                         record_id,
                                         "sync_to_sqlite",
                                         int(time.time()),
-                                        self._serialize_value({"username": username, "record_id": record_id})
+                                        self._serialize_value(
+                                            {"username": username, "record_id": record_id}
+                                        ),
                                     )
                                     self._check_parameters(params, query)
                                     await conn.execute(query, params)
-                                    # Cập nhật tiến trình sau mỗi bản ghi
+
                                     if progress_callback and total_records > 0:
                                         await progress_callback(processed_records / total_records)
                                 except Exception as e:
-                                    self.logger.error(f"{username}: Lỗi khi chèn bản ghi {record_id} vào {collection_name}: {str(e)}")
+                                    self.logger.error(
+                                        f"{username}: Lỗi khi chèn bản ghi {record_id} "
+                                        f"vào {collection_name}: {str(e)}"
+                                    )
                                     continue
                             await conn.commit()
-                            self.logger.debug(f"{username}: Đồng bộ {len(batch)} bản ghi trong {collection_name}")
-                        else:
-                            self.logger.debug(f"{username}: Không có bản ghi mới để đồng bộ trong {collection_name}")
 
                         if progress_callback and total_records > 0:
                             await progress_callback(processed_records / total_records)
 
+                    # Ghi log đồng bộ tổng
                     if synced_records > 0:
                         query = (
-                            "INSERT INTO sync_log (id, table_name, record_id, action, timestamp, details) "
+                            "INSERT INTO sync_log "
+                            "(id, table_name, record_id, action, timestamp, details) "
                             "VALUES (?, ?, ?, ?, ?, ?)"
                         )
                         params = (
@@ -2214,36 +2287,40 @@ class FirestoreHandler:
                             None,
                             "sync_to_sqlite",
                             int(time.time()),
-                            self._serialize_value({
-                                "username": username,
-                                "synced_records": synced_records,
-                                "collections": collections
-                            })
+                            self._serialize_value(
+                                {
+                                    "username": username,
+                                    "synced_records": synced_records,
+                                    "collections": collections,
+                                }
+                            ),
                         )
                         self._check_parameters(params, query)
                         await conn.execute(query, params)
                         await conn.commit()
-                        self.logger.info(f"{username}: Ghi log đồng bộ cho {synced_records} bản ghi")
 
-                    self.logger.info(f"{username}: Đồng bộ {synced_records} bản ghi từ Firestore sang SQLite")
+                    self.logger.info(
+                        f"{username}: Đồng bộ {synced_records} bản ghi từ Firestore sang SQLite"
+                    )
                     if progress_callback:
-                        await progress_callback(1.0)  # Đảm bảo tiến trình đạt 100% khi hoàn thành
+                        await progress_callback(1.0)
+
                     return {
                         "success": f"Đồng bộ {synced_records} bản ghi từ Firestore sang SQLite",
-                        "synced_records": synced_records
+                        "synced_records": synced_records,
                     }
 
         except asyncio.TimeoutError as e:
             self.logger.error(f"{username}: Timeout trong sync_to_sqlite: {str(e)}")
             if progress_callback:
-                await progress_callback(1.0)  # Đảm bảo tiến trình đạt 100% khi lỗi
+                await progress_callback(1.0)
             return {"error": f"Timeout khi đồng bộ: {str(e)}", "synced_records": 0}
+
         except Exception as e:
             self.logger.error(f"{username}: Lỗi đồng bộ từ Firestore sang SQLite: {str(e)}")
             if progress_callback:
-                await progress_callback(1.0)  # Đảm bảo tiến trình đạt 100% khi lỗi
+                await progress_callback(1.0)
             return {"error": f"Lỗi đồng bộ: {str(e)}", "synced_records": 0}
-    
     
     
     async def sync_from_sqlite(
@@ -2270,28 +2347,54 @@ class FirestoreHandler:
                         "SELECT MAX(timestamp) FROM sync_log WHERE action = 'sync_to_firestore'"
                     ) as cursor:
                         last_sync = (await cursor.fetchone())[0] or 0
-                        self.logger.info(f"{username}: Thời gian đồng bộ lên Firestore cuối cùng: {last_sync}")
+                        self.logger.info(
+                            f"{username}: Thời gian đồng bộ lên Firestore cuối cùng: {last_sync}"
+                        )
 
                     async with conn.execute(
-                        "SELECT table_name, record_id FROM sync_log WHERE action = 'DELETE' AND timestamp > ?",
+                        "SELECT table_name, record_id, details FROM sync_log "
+                        "WHERE action = 'DELETE' AND timestamp > ?",
                         (last_sync,)
                     ) as cursor:
                         delete_logs = await cursor.fetchall()
 
                     async def delete_firestore_records():
                         count = 0
-                        for table_name, record_id in delete_logs:
+                        for table_name, record_id, details_json in delete_logs:
                             if specific_collections and table_name not in specific_collections:
                                 continue
+                            # Xóa bản ghi trên Firestore
                             await self.db.collection(table_name).document(record_id).delete()
-                            self.logger.debug(f"{username}: Đã xóa {record_id} trong Firestore collection {table_name}")
+                            self.logger.debug(
+                                f"{username}: Đã xóa {record_id} trong Firestore collection {table_name}"
+                            )
+
+                            # Xóa file vật lý cục bộ nếu là chat_messages và có file_url
+                            if table_name == "chat_messages":
+                                try:
+                                    details = json.loads(details_json)
+                                    file_url = details.get("file_url")
+                                    if file_url:
+                                        file_id = file_url.split("/")[-1]
+                                        file_path = os.path.join(Config.CHAT_FILE_STORAGE_PATH, file_id)
+                                        if os.path.exists(file_path):
+                                            os.remove(file_path)
+                                            self.logger.info(
+                                                f"{username}: Đã xóa file vật lý cục bộ {file_path}"
+                                            )
+                                except Exception as e:
+                                    self.logger.error(
+                                        f"{username}: Lỗi xóa file vật lý cục bộ: {str(e)}"
+                                    )
                             count += 1
                         return count
 
                     deleted_count = await retry_firestore_operation(delete_firestore_records)
                     self.logger.debug(f"{username}: Đã xóa {deleted_count} bản ghi trên Firestore")
 
-                    async with conn.execute("SELECT collection_name, fields FROM collection_schemas") as cursor:
+                    async with conn.execute(
+                        "SELECT collection_name, fields FROM collection_schemas"
+                    ) as cursor:
                         local_schemas = {
                             row[0]: self._deserialize_schema(row[1])
                             for row in await cursor.fetchall()
@@ -2302,16 +2405,27 @@ class FirestoreHandler:
                         schemas = {}
                         async for doc in self.db.collection("collection_schemas").stream():
                             doc_data = doc.to_dict()
-                            if not isinstance(doc_data, dict) or "collection_name" not in doc_data or "fields" not in doc_data:
+                            if not isinstance(doc_data, dict) or \
+                               "collection_name" not in doc_data or \
+                               "fields" not in doc_data:
                                 continue
-                            schemas[doc_data["collection_name"]] = self._deserialize_schema(doc_data["fields"])
+                            schemas[doc_data["collection_name"]] = self._deserialize_schema(
+                                doc_data["fields"]
+                            )
                         return schemas
 
                     firestore_schemas = await retry_firestore_operation(get_firestore_schemas)
 
-                    async with conn.execute("SELECT name FROM sqlite_master WHERE type='table'") as cursor:
-                        tables = [row[0] for row in await cursor.fetchall() if row[0] not in Config.SYSTEM_TABLES]
+                    async with conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ) as cursor:
+                        tables = [
+                            row[0] for row in await cursor.fetchall()
+                            if row[0] not in Config.SYSTEM_TABLES
+                        ]
+
                     tables = [t for t in tables if not t.endswith('_fts') and 'fts' not in t.lower()]
+
                     if specific_collections:
                         tables = [t for t in tables if t in specific_collections]
                     elif protected_only:
@@ -2321,6 +2435,7 @@ class FirestoreHandler:
                         ]
                     else:
                         tables = [t for t in tables if t not in Config.PROTECTED_TABLES]
+
                     tables = list(set(tables) | set(Config.SPECIAL_TABLES))
                     self.logger.info(f"{username}: Đồng bộ các bảng (excluded FTS): {tables}")
 
@@ -2344,23 +2459,35 @@ class FirestoreHandler:
                         async with conn.execute(f'SELECT COUNT(*) FROM "{table}"') as cursor:
                             row_count = (await cursor.fetchone())[0]
                         is_empty = row_count == 0
-                        self.logger.debug(f"{username}: Bảng {table} {'rỗng' if is_empty else f'có {row_count} bản ghi'}")
+                        self.logger.debug(
+                            f"{username}: Bảng {table} "
+                            f"{'rỗng' if is_empty else f'có {row_count} bản ghi'}"
+                        )
 
                         async with conn.execute(f'PRAGMA table_info("{table}")') as cursor:
                             columns_info = {row[1]: row[2] for row in await cursor.fetchall()}
                         has_timestamp = "timestamp" in columns_info
-                        self.logger.debug(f"{username}: Table {table} has timestamp column: {has_timestamp}")
+                        self.logger.debug(
+                            f"{username}: Table {table} has timestamp column: {has_timestamp}"
+                        )
 
                         offset = 0
                         while True:
-                            if is_empty or table in Config.SPECIAL_TABLES or table in Config.PROTECTED_TABLES or not has_timestamp:
+                            if is_empty or table in Config.SPECIAL_TABLES or \
+                               table in Config.PROTECTED_TABLES or not has_timestamp:
                                 query = f'SELECT * FROM "{table}" LIMIT ? OFFSET ?'
                                 params = [page_size, offset]
-                                self.logger.debug(f"{username}: Đồng bộ toàn bộ cho {table} (empty/special/no timestamp)")
+                                self.logger.debug(
+                                    f"{username}: Đồng bộ toàn bộ cho {table} "
+                                    "(empty/special/no timestamp)"
+                                )
                             else:
                                 query = f'SELECT * FROM "{table}" WHERE timestamp > ? LIMIT ? OFFSET ?'
                                 params = [last_sync, page_size, offset]
-                                self.logger.debug(f"{username}: Đồng bộ bản ghi mới cho {table} (timestamp > {last_sync})")
+                                self.logger.debug(
+                                    f"{username}: Đồng bộ bản ghi mới cho {table} "
+                                    f"(timestamp > {last_sync})"
+                                )
 
                             if record_limit:
                                 params[-2] = min(page_size, record_limit - offset)
@@ -2374,13 +2501,15 @@ class FirestoreHandler:
                                     offset += len(rows)
                             except Exception as query_error:
                                 self.logger.error(
-                                    f"{username}: Lỗi query cho table {table}: {str(query_error)} (query: {query}, params: {params}). Skip table."
+                                    f"{username}: Lỗi query cho table {table}: {str(query_error)} "
+                                    f"(query: {query}, params: {params}). Skip table."
                                 )
                                 break
 
                             if record_limit and offset >= record_limit:
                                 break
 
+                    # --- Đồng bộ từng bảng ---
                     for table in tables:
                         if not validate_name(table):
                             self.logger.warning(f"{username}: Tên bảng {table} không hợp lệ, bỏ qua")
@@ -2388,10 +2517,18 @@ class FirestoreHandler:
 
                         self.logger.debug(f"{username}: Đồng bộ bảng {table}")
                         async with conn.execute(f'PRAGMA table_info("{table}")') as cursor:
-                            columns = {sanitize_field_name(row[1]): row[2] for row in await cursor.fetchall()}
-                        local_schema = local_schemas.get(table, {"id": "TEXT", "timestamp": "INTEGER"})
+                            columns = {
+                                sanitize_field_name(row[1]): row[2]
+                                for row in await cursor.fetchall()
+                            }
+
+                        local_schema = local_schemas.get(
+                            table, {"id": "TEXT", "timestamp": "INTEGER"}
+                        )
                         firestore_schema = firestore_schemas.get(table, {})
-                        merged_schema = self.validate_schema_compatibility(local_schema, firestore_schema)
+                        merged_schema = self.validate_schema_compatibility(
+                            local_schema, firestore_schema
+                        )
 
                         if merged_schema != local_schema:
                             schema_json = self._serialize_value(merged_schema)
@@ -2419,7 +2556,9 @@ class FirestoreHandler:
                                 return 1
 
                             updated_count = await retry_firestore_operation(update_firestore_schema)
-                            self.logger.debug(f"{username}: Cập nhật {updated_count} schema cho {table}")
+                            self.logger.debug(
+                                f"{username}: Cập nhật {updated_count} schema cho {table}"
+                            )
 
                         valid_columns = list(merged_schema.keys())
                         column_list = list(columns.keys())
@@ -2430,31 +2569,43 @@ class FirestoreHandler:
                                 try:
                                     data = {
                                         col: row[column_list.index(col)]
-                                        for col in valid_columns if col in column_list and col != "rowid"
+                                        for col in valid_columns
+                                        if col in column_list and col != "rowid"
                                     }
                                     data = {k: v for k, v in data.items() if v is not None}
                                     if not data:
                                         continue
+
                                     doc_id = data.get("id", str(uuid.uuid4()))
+
                                     if table in Config.SPECIAL_TABLES or table in Config.PROTECTED_TABLES:
-                                        key_field = "collection_name" if table == "collection_schemas" else \
-                                            "username" if table in Config.SPECIAL_TABLES else "collection_name"
+                                        key_field = (
+                                            "collection_name" if table == "collection_schemas"
+                                            else "username" if table in Config.SPECIAL_TABLES
+                                            else "collection_name"
+                                        )
                                         key_value = data.get(key_field)
                                         if not key_value:
                                             continue
                                         doc_id = hashlib.sha256(key_value.encode()).hexdigest()
                                         await retry_firestore_operation(
-                                            lambda: self.db.collection(table).document(doc_id).set(data, merge=True)
+                                            lambda: self.db.collection(table)
+                                            .document(doc_id)
+                                            .set(data, merge=True)
                                         )
                                         synced_records += 1
                                         processed_records += 1
-                                        self.logger.debug(f"{username}: Đồng bộ bản ghi {doc_id} trong {table}")
+                                        self.logger.debug(
+                                            f"{username}: Đồng bộ bản ghi {doc_id} trong {table}"
+                                        )
                                         if progress_callback and total_records > 0:
                                             await progress_callback(processed_records / total_records)
                                         continue
+
                                     batch.append((table, doc_id, data))
                                     self.logger.debug(
-                                        f"{username}: Added to batch: table={table}, doc_id={doc_id}, data_keys={list(data.keys())}"
+                                        f"{username}: Added to batch: table={table}, "
+                                        f"doc_id={doc_id}, data_keys={list(data.keys())}"
                                     )
                                 except Exception as row_error:
                                     self.logger.error(
@@ -2478,7 +2629,7 @@ class FirestoreHandler:
                                         self.logger.error(
                                             f"{username}: Lỗi sync batch cho {table}: {str(batch_error)}. Skip batch."
                                         )
-                                    batch.clear()
+                                        batch.clear()
 
                             if batch:
                                 try:
@@ -2496,11 +2647,12 @@ class FirestoreHandler:
                                     self.logger.error(
                                         f"{username}: Lỗi sync final batch cho {table}: {str(batch_error)}"
                                     )
-                                batch.clear()
+                                    batch.clear()
 
                             if synced_records > 0:
                                 await conn.execute(
-                                    "DELETE FROM sync_log WHERE table_name = ? AND action IN ('INSERT', 'UPDATE', 'DELETE')",
+                                    "DELETE FROM sync_log WHERE table_name = ? "
+                                    "AND action IN ('INSERT', 'UPDATE', 'DELETE')",
                                     (table,)
                                 )
                                 await conn.commit()
@@ -2542,12 +2694,12 @@ class FirestoreHandler:
             if progress_callback:
                 await progress_callback(1.0)
             return {"error": f"Timeout khi đồng bộ: {str(e)}", "synced_records": 0}
+
         except Exception as e:
             self.logger.error(f"{username}: Lỗi đồng bộ từ SQLite sang Firestore: {str(e)}")
             if progress_callback:
                 await progress_callback(1.0)
             return {"error": f"Lỗi đồng bộ: {str(e)}", "synced_records": 0}
-    
     
     
 class Core:
@@ -3378,11 +3530,12 @@ class Core:
             raise DatabaseError(f"Lỗi thêm tin nhắn: {str(e)}")
 
     
-    async def delete_chat_messages(self, username: str, session_token: str) -> List[str]:
-        """Xóa lịch sử chat, file/hình ảnh liên quan, và ghi sync_log cho hành động DELETE."""
+    async def delete_chat_messages(self, username: str, session_token: str = None) -> List[str]:
+        """Xóa lịch sử chat và ghi sync_log cho hành động DELETE, không xóa file vật lý."""
         try:
             from utils.core_common import check_disk_space
-            check_disk_space()  # Kiểm tra dung lượng đĩa trước khi xóa
+
+            check_disk_space()
 
             record_ids = []
             file_urls = []
@@ -3392,26 +3545,33 @@ class Core:
                     """
                     SELECT id, file_url 
                     FROM chat_messages 
-                    WHERE session_token = ? AND username = ?
+                    WHERE username = ?
                     """,
-                    (session_token, username),
+                    (username,),
                 ) as cursor:
                     rows = await cursor.fetchall()
                     record_ids = [row[0] for row in rows]
-                    file_urls = [row[1] for row in rows if row[1]]  # Lấy file_url không null
+                    file_urls = [row[1] for row in rows if row[1]]
 
                 # Xóa bản ghi trong chat_messages
                 await conn.execute(
                     """
                     DELETE FROM chat_messages 
-                    WHERE session_token = ? AND username = ?
+                    WHERE username = ?
                     """,
-                    (session_token, username),
+                    (username,),
                 )
 
                 current_time = int(time.time())
-                # Ghi log DELETE vào sync_log
-                for record_id in record_ids:
+                # Ghi log DELETE vào sync_log, bao gồm file_url nếu có
+                for record_id, file_url in [(row[0], row[1]) for row in rows]:
+                    details = {
+                        "username": username,
+                        "action": "delete_chat_history",
+                        "record_id": record_id,
+                    }
+                    if file_url:
+                        details["file_url"] = file_url
                     await conn.execute(
                         """
                         INSERT INTO sync_log 
@@ -3424,43 +3584,22 @@ class Core:
                             record_id,
                             "DELETE",
                             current_time,
-                            json.dumps(
-                                {
-                                    "username": username,
-                                    "action": "delete_chat_history",
-                                    "session_token": session_token,
-                                    "record_id": record_id,
-                                },
-                                ensure_ascii=False,
-                            ),
+                            json.dumps(details, ensure_ascii=False),
                         ),
                     )
 
                 await conn.commit()
 
-            # Xóa file/hình ảnh vật lý trong /tmp/chat_files/
-            deleted_files = []
-            for file_url in file_urls:
-                file_id = file_url.split("/")[-1]  # Lấy file_id từ /files/<file_id>
-                file_path = os.path.join(Config.CHAT_FILE_STORAGE_PATH, file_id)
-                if os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                        deleted_files.append(file_id)
-                        self.logger.info(f"{username}: Đã xóa file {file_path}")
-                    except Exception as e:
-                        self.logger.error(f"{username}: Lỗi xóa file {file_path}: {str(e)}")
-                        # Tiếp tục xử lý các file khác, không raise lỗi
-
             self.logger.info(
-                f"{username}: Đã xóa {len(record_ids)} tin nhắn và {len(deleted_files)} file, ghi sync_log"
+                f"{username}: Đã xóa {len(record_ids)} tin nhắn, ghi sync_log, giữ lại file vật lý"
             )
             return record_ids
 
         except Exception as e:
             self.logger.error(f"Lỗi xóa lịch sử chat cho {username}: {str(e)}")
             raise DatabaseError(f"Lỗi xóa lịch sử chat: {str(e)}")
-            
+    
+    
     
     async def upload_file(
         self,
