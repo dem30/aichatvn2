@@ -17,6 +17,7 @@ from uiapp.components.form import FormComponent
 from utils.logging import get_logger
 from utils.core_common import check_disk_space, sanitize_field_name
 from uiapp.language import get_text
+from fuzzywuzzy import fuzz
 
 logger = get_logger("TrainingComponent")
 
@@ -176,6 +177,8 @@ class TrainingComponent:
                 ui.notify(get_text(self.language, "update_training_error", "Error updating training UI"), type="negative")
             return False
 
+    
+    
     async def fetch_qa_data(
         self,
         progress_callback: Optional[Callable[[float], None]] = None,
@@ -185,16 +188,21 @@ class TrainingComponent:
         try:
             async with aiosqlite.connect(Config.SQLITE_DB_PATH) as conn:
                 search_value = self.search_input.value.strip() if self.search_input else ""
-                logger.debug(f"{self.username}: fetch_qa_data with search_value='{search_value}', page={page}, page_size={page_size}")
-                
+                logger.debug(
+                    f"{self.username}: fetch_qa_data with search_value='{search_value}', "
+                    f"page={page}, page_size={page_size}"
+                )
+
                 if search_value:
                     clean_search = search_value.rstrip('?.!;,').strip()
-                    logger.debug(f"{self.username}: Original search '{search_value}', cleaned '{clean_search}'")
-                    
+                    logger.debug(
+                        f"{self.username}: Original search '{search_value}', cleaned '{clean_search}'"
+                    )
+
                     try:
                         fts_query = f'({clean_search}* OR "{clean_search}" OR {clean_search})'
                         logger.debug(f"{self.username}: FTS query: {fts_query}")
-                        
+
                         query_count = """
                             SELECT COUNT(*) FROM qa_fts 
                             WHERE qa_fts MATCH ? AND rowid IN (
@@ -205,77 +213,21 @@ class TrainingComponent:
                         total_matches = (await cursor_count.fetchone())[0]
                         logger.debug(f"{self.username}: FTS count: {total_matches}")
 
-                        if total_matches == 0:
-                            logger.info(f"{self.username}: No FTS results for '{search_value}' (cleaned: '{clean_search}')")
-                            return [], 0
+                        if total_matches > 0:
+                            query = """
+                                SELECT qa_data.id, qa_data.question, qa_data.answer, qa_data.category, 
+                                       qa_data.created_by, qa_data.created_at, qa_data.timestamp
+                                FROM qa_fts JOIN qa_data ON qa_fts.rowid = qa_data.rowid
+                                WHERE qa_fts MATCH ? AND qa_data.created_by = ?
+                                ORDER BY rank, qa_data.timestamp DESC
+                                LIMIT ? OFFSET ?
+                            """
+                            params = [fts_query, self.username, page_size, (page - 1) * page_size]
+                            cursor = await conn.execute(query, params)
+                            rows = await cursor.fetchall()
 
-                        query = """
-                            SELECT qa_data.id, qa_data.question, qa_data.answer, qa_data.category, 
-                                   qa_data.created_by, qa_data.created_at, qa_data.timestamp
-                            FROM qa_fts JOIN qa_data ON qa_fts.rowid = qa_data.rowid
-                            WHERE qa_fts MATCH ? AND qa_data.created_by = ?
-                            ORDER BY rank, qa_data.timestamp DESC
-                            LIMIT ? OFFSET ?
-                        """
-                        params = [fts_query, self.username, page_size, (page - 1) * page_size]
-                        cursor = await conn.execute(query, params)
-                        rows = await cursor.fetchall()
-                        
-                        data = [
-                            {
-                                "id": row[0],
-                                "question": row[1],
-                                "answer": row[2],
-                                "category": row[3],
-                                "created_by": row[4],
-                                "created_at": row[5],
-                                "timestamp": row[6],
-                                "score": 0
-                            } for row in rows
-                        ]
-                        
-                        logger.info(f"{self.username}: FTS search '{search_value}' (cleaned '{clean_search}'): {total_matches} matches, page {page} ({len(data)} items)")
-                        
-                        if total_matches > 1000:
-                            logger.warning(f"{self.username}: Many FTS results ({total_matches}), showing top {len(data)}")
-                            if context.client.has_socket_connection:
-                                ui.notify(get_text(self.language, "too_many_results", "Found many results ({count}), showing page {page}", count=total_matches, page=page), type="info")
-                        
-                        if not data:
-                            if context.client.has_socket_connection:
-                                ui.notify(get_text(self.language, "no_qa_found", "No matching Q&A found"), type="info")
-                        
-                        return data, total_matches
-                    
-                    except Exception as fts_error:
-                        logger.warning(f"{self.username}: FTS5 error: {str(fts_error)}. Falling back to fuzzy in-memory (limit 1000 records)")
-                        if context.client.has_socket_connection:
-                            ui.notify(get_text(self.language, "fts_not_ready", "Using basic search (FTS not ready)"), type="warning")
-                        
-                        async with conn.execute(
-                            "SELECT id, question, answer, category, created_by, created_at, timestamp "
-                            "FROM qa_data WHERE created_by = ? ORDER BY timestamp DESC LIMIT 1000",
-                            (self.username,)
-                        ) as cursor:
-                            all_rows = await cursor.fetchall()
-                        
-                        if not all_rows:
-                            logger.info(f"{self.username}: No Q&A data found")
-                            return [], 0
-                        
-                        threshold = getattr(Config, "TRAINING_SEARCH_THRESHOLD", 0.7)
-                        search_lower = search_value.lower()
-                        
-                        matches = []
-                        for row in all_rows:
-                            q_lower = row[1].lower() if row[1] else ""
-                            a_lower = row[2].lower() if row[2] else ""
-                            max_ratio = max(
-                                ratio(search_lower, q_lower),
-                                ratio(search_lower, a_lower)
-                            )
-                            if max_ratio >= threshold:
-                                matches.append({
+                            data = [
+                                {
                                     "id": row[0],
                                     "question": row[1],
                                     "answer": row[2],
@@ -283,32 +235,142 @@ class TrainingComponent:
                                     "created_by": row[4],
                                     "created_at": row[5],
                                     "timestamp": row[6],
-                                    "score": round(max_ratio * 100, 1)
-                                })
-                        
-                        matches.sort(key=lambda x: (x["score"], x["timestamp"]), reverse=True)
-                        total_matches = len(matches)
-                        start_idx = (page - 1) * page_size
-                        end_idx = start_idx + page_size
-                        data = matches[start_idx:end_idx]
-                        
-                        logger.info(f"{self.username}: Fallback fuzzy search '{search_value}' (in 1000 records): {total_matches} matches, page {page} ({len(data)} items)")
-                        
-                        if len(all_rows) == 1000:
-                            logger.warning(f"{self.username}: Fallback searched only in 1000 most recent records")
-                        
-                        return data, total_matches
-                
+                                    "score": 0
+                                } for row in rows
+                            ]
+
+                            logger.info(
+                                f"{self.username}: FTS search '{search_value}' (cleaned '{clean_search}'): "
+                                f"{total_matches} matches, page {page} ({len(data)} items)"
+                            )
+
+                            if total_matches > 1000:
+                                logger.warning(
+                                    f"{self.username}: Many FTS results ({total_matches}), "
+                                    f"showing top {len(data)}"
+                                )
+                                if context.client.has_socket_connection:
+                                    ui.notify(
+                                        get_text(
+                                            self.language,
+                                            "too_many_results",
+                                            "Found many results ({count}), showing page {page}",
+                                            count=total_matches,
+                                            page=page
+                                        ),
+                                        type="info"
+                                    )
+
+                            if not data:
+                                if context.client.has_socket_connection:
+                                    ui.notify(
+                                        get_text(
+                                            self.language,
+                                            "no_qa_found",
+                                            "No matching Q&A found"
+                                        ),
+                                        type="info"
+                                    )
+
+                            return data, total_matches
+
+                        else:
+                            logger.info(
+                                f"{self.username}: No exact FTS results for '{search_value}', "
+                                f"falling back to fuzzy matching"
+                            )
+
+                    except Exception as fts_error:
+                        logger.warning(
+                            f"{self.username}: FTS error (not no-results): {str(fts_error)}. "
+                            "Falling back to fuzzy in-memory (limit 1000 records)"
+                        )
+                        if context.client.has_socket_connection:
+                            ui.notify(
+                                get_text(
+                                    self.language,
+                                    "fts_not_ready",
+                                    "Using fuzzy search (FTS error)"
+                                ),
+                                type="warning"
+                            )
+
+                    # --- Fallback fuzzy search ---
+                    async with conn.execute(
+                        """
+                        SELECT id, question, answer, category, created_by, created_at, timestamp
+                        FROM qa_data
+                        WHERE created_by = ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1000
+                        """,
+                        (self.username,)
+                    ) as cursor:
+                        all_rows = await cursor.fetchall()
+
+                    if not all_rows:
+                        logger.info(f"{self.username}: No Q&A data found")
+                        return [], 0
+
+                    threshold = getattr(Config, "TRAINING_SEARCH_THRESHOLD", 0.6)
+                    search_lower = search_value.strip().lower()
+
+                    matches = []
+                    for row in all_rows:
+                        q_lower = row[1].lower() if row[1] else ""
+                        a_lower = row[2].lower() if row[2] else ""
+                        max_ratio = max(
+                            fuzz.ratio(search_lower, q_lower),
+                            fuzz.ratio(search_lower, a_lower),
+                            fuzz.token_sort_ratio(search_lower, q_lower),
+                            fuzz.token_sort_ratio(search_lower, a_lower),
+                            fuzz.partial_ratio(search_lower, q_lower),
+                            fuzz.partial_ratio(search_lower, a_lower)
+                        )
+                        if max_ratio >= threshold * 100:
+                            matches.append({
+                                "id": row[0],
+                                "question": row[1],
+                                "answer": row[2],
+                                "category": row[3],
+                                "created_by": row[4],
+                                "created_at": row[5],
+                                "timestamp": row[6],
+                                "score": round(max_ratio, 1)
+                            })
+
+                    matches.sort(key=lambda x: (x["score"], x["timestamp"]), reverse=True)
+                    total_matches = len(matches)
+                    start_idx = (page - 1) * page_size
+                    end_idx = start_idx + page_size
+                    data = matches[start_idx:end_idx]
+
+                    logger.info(
+                        f"{self.username}: Fallback fuzzy search '{search_value}' "
+                        f"(in 1000 records): {total_matches} matches, "
+                        f"page {page} ({len(data)} items)"
+                    )
+
+                    if len(all_rows) == 1000:
+                        logger.warning(
+                            f"{self.username}: Fallback searched only in 1000 most recent records"
+                        )
+
+                    return data, total_matches
+
                 else:
+                    # --- Non-search case ---
                     query_count = "SELECT COUNT(*) FROM qa_data WHERE created_by = ?"
                     cursor_count = await conn.execute(query_count, (self.username,))
                     total_matches = (await cursor_count.fetchone())[0]
                     logger.debug(f"{self.username}: Non-search count: {total_matches}")
 
                     query = """
-                        SELECT id, question, answer, category, created_by, created_at, timestamp 
-                        FROM qa_data WHERE created_by = ?
-                        ORDER BY timestamp DESC LIMIT ? OFFSET ?
+                        SELECT id, question, answer, category, created_by, created_at, timestamp
+                        FROM qa_data
+                        WHERE created_by = ?
+                        ORDER BY timestamp DESC
+                        LIMIT ? OFFSET ?
                     """
                     params = [self.username, page_size, (page - 1) * page_size]
                     cursor = await conn.execute(query, params)
@@ -324,19 +386,33 @@ class TrainingComponent:
                             "timestamp": row[6]
                         } for row in rows
                     ]
-                    
-                    logger.info(f"{self.username}: Loaded {len(data)} Q&A records without search, total: {total_matches}")
+
+                    logger.info(
+                        f"{self.username}: Loaded {len(data)} Q&A records without search, "
+                        f"total: {total_matches}"
+                    )
                     return data, total_matches
-                
+
                 if progress_callback:
                     await progress_callback(1.0)
-        
-        except Exception as e:
-            logger.error(f"{self.username}: Error fetching Q&A data: {str(e)}", exc_info=True)
-            if context.client.has_socket_connection:
-                ui.notify(get_text(self.language, "fetch_qa_error", "Error fetching Q&A data: {error}", error=str(e)), type="negative")
-            return [], 0
 
+        except Exception as e:
+            logger.error(
+                f"{self.username}: Error fetching Q&A data: {str(e)}",
+                exc_info=True
+            )
+            if context.client.has_socket_connection:
+                ui.notify(
+                    get_text(
+                        self.language,
+                        "fetch_qa_error",
+                        "Error fetching Q&A data: {error}",
+                        error=str(e)
+                    ),
+                    type="negative"
+                )
+            return [], 0
+            
     async def update_qa_records(self):
         try:
             data, total_count = await self.fetch_qa_data(page=1, page_size=QA_HISTORY_LIMIT)
