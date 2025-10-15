@@ -76,7 +76,7 @@ class ChatComponent:
         self.last_message_id = None
         self.progress = None
         self.displayed_message_ids = set()
-        self.qa_threshold = getattr(Config, "QA_SEARCH_THRESHOLD", 0.8)
+        self.qa_threshold = getattr(Config, "QA_SEARCH_THRESHOLD", 0.7)
         
         if "model" not in self.client_state:
             self.client_state["model"] = Config.DEFAULT_MODEL
@@ -463,7 +463,7 @@ class ChatComponent:
         question: str,
         username: str,
         limit: int = 1,
-        threshold: float = 0.6
+        threshold: float = 0.5
     ):
         """Tìm câu hỏi tương đồng trong qa_data, ưu tiên khớp chính xác nhất."""
         try:
@@ -622,11 +622,13 @@ class ChatComponent:
             self.messages = []
 
     
+    
     async def update_messages(self):
         username = self.client_state.get("username", "")
         if not self.rendered or not self.messages_container:
             logger.warning(
-                f"{username}: UI not ready (rendered={self.rendered}, messages_container={self.messages_container})"
+                f"{username}: UI not ready (rendered={self.rendered}, "
+                f"messages_container={self.messages_container})"
             )
             ui.notify(get_text(self.language, "chat_ui_not_ready"), type="negative")
             return False
@@ -663,14 +665,16 @@ class ChatComponent:
                             else get_text(self.language, "ai_role_label")
                         )
                         classes = (
-                            "bg-blue-100 mr-1 self-start"
+                            "bg-blue-100 self-start"
                             if msg["role"] == "user"
-                            else "bg-green-100 mr-1 self-start"
+                            else "bg-green-100 self-start"
                         )
 
                         with ui.element("div").classes(
-                            f"p-1 sm:p-2 mb-1 rounded {classes} max-w-[98%] whitespace-normal"
+                            f"p-1 sm:p-2 mb-1 rounded {classes} max-w-full "
+                            f"sm:max-w-[98%] whitespace-normal"
                         ).props(f"id=message-{msg['id']}"):
+
                             if msg.get("type") == "image" and msg.get("file_url"):
                                 file_id = msg["file_url"].split("/")[-1]
                                 file_path = os.path.join(
@@ -678,7 +682,7 @@ class ChatComponent:
                                 )
                                 if os.path.exists(file_path):
                                     ui.image(msg["file_url"]).classes(
-                                        "max-w-[80%] sm:max-w-xs rounded object-contain"
+                                        "max-w-[90%] sm:max-w-xs rounded object-contain"
                                     )
                                 else:
                                     logger.error(f"{username}: Image not found: {file_path}")
@@ -735,7 +739,8 @@ class ChatComponent:
                 ui.update()
                 await self.scroll_to_bottom()
                 logger.info(
-                    f"{username}: Updated {len(new_messages)} new messages, total: {len(self.messages)}"
+                    f"{username}: Updated {len(new_messages)} new messages, "
+                    f"total: {len(self.messages)}"
                 )
                 return True
 
@@ -744,6 +749,152 @@ class ChatComponent:
             ui.notify(get_text(self.language, "update_messages_error"), type="negative")
             return False
 
+    async def render(self):
+        username = self.client_state.get("username", "")
+        self.client_id = getattr(context.client, "id", None)
+        if (
+            not self.client_id
+            or not self.client_state
+            or "session_token" not in self.client_state
+            or not validate_name(self.client_state["session_token"])
+        ):
+            logger.error(f"{username}: Phiên hoặc client_id không hợp lệ")
+            ui.notify(get_text(self.language, "invalid_session"), type="negative")
+            return False
+
+        try:
+            async with asyncio.timeout(30):
+                check_disk_space()
+                client_storage = app.storage.client.setdefault(self.client_id, {})
+                new_container = ui.element("div").classes("w-full p-1 sm:p-4")
+
+                with new_container:
+                    ui.label(get_text(self.language, "chat_ai_label")).classes(
+                        "text-lg font-semibold mb-2"
+                    )
+                    self.messages_container = ui.scroll_area().classes(
+                        "flex-1 mb-2 h-[50vh] sm:h-[60vh]"
+                    )
+
+                    if Config.SHOW_MODEL_COMBOBOX:
+                        model_select = ui.select(
+                            Config.AVAILABLE_MODELS,
+                            label=get_text(self.language, "select_model_label"),
+                            value=self.client_state.get(
+                                "model", Config.DEFAULT_MODEL
+                            ),
+                        ).classes("w-full sm:w-1/4 mb-2").on(
+                            "update:modelValue",
+                            lambda e: self.on_model_change(e.args),
+                        )
+                    else:
+                        self.client_state["model"] = Config.DEFAULT_MODEL
+
+                    if Config.SHOW_MODE_COMBOBOX:
+                        mode_options = ["Grok", "QA", "Hybrid"]
+                        mode_select = ui.select(
+                            mode_options,
+                            label=get_text(self.language, "select_mode_label"),
+                            value=self.client_state.get(
+                                "chat_mode", Config.DEFAULT_CHAT_MODE
+                            ),
+                        ).classes("w-full sm:w-1/4 mb-2").on(
+                            "update:modelValue",
+                            lambda e: self.handle_mode_change(e.args, mode_options),
+                        )
+                    else:
+                        self.client_state["chat_mode"] = Config.DEFAULT_CHAT_MODE
+
+                    with ui.element("div").classes("w-full flex flex-col sm:flex-row gap-1"):
+                        self.message_input = ui.textarea(
+                            label=get_text(self.language, "message_input_label"),
+                            placeholder=get_text(
+                                self.language,
+                                self.placeholder,
+                                default="Enter your message..."
+                            ),
+                        ).props("clearable").classes("flex-1").bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        ).on(
+                            "keydown.enter",
+                            lambda e: self.handle_send()
+                            if not e.args.get("repeat")
+                            else None,
+                        )
+
+                        self.upload_input = ui.upload(
+                            label=get_text(self.language, "upload_file_label"),
+                            auto_upload=False,
+                            on_upload=lambda e: self.handle_upload(e),
+                        ).props(
+                            f'accept="{",".join(Config.CHAT_FILE_ALLOWED_FORMATS)}"'
+                        ).classes("w-full sm:w-auto").bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        )
+
+                        ui.button(
+                            get_text(self.language, "upload_button"),
+                            on_click=lambda: self.upload_input.run_method("upload"),
+                        ).classes(
+                            "bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto"
+                        ).bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        )
+
+                        ui.button(
+                            get_text(self.language, self.send_button_label),
+                            on_click=self.handle_send,
+                            icon="send",
+                        ).classes(
+                            "bg-blue-600 text-white w-full sm:w-auto"
+                        ).bind_enabled_from(
+                            self, "loading", backward=lambda x: not x
+                        )
+
+                        ui.button(
+                            get_text(self.language, "reset_button"),
+                            on_click=self.reset,
+                            icon="delete",
+                        ).classes("bg-red-600 text-white w-full sm:w-auto")
+
+                if self.container:
+                    if (
+                        hasattr(self.container, "parent_slot")
+                        and self.container in self.container.parent_slot.children
+                    ):
+                        self.container.clear()
+                        self.container.delete()
+                    else:
+                        logger.debug(
+                            f"{username}: Bỏ qua xóa container cũ vì không tồn tại trong danh sách children"
+                        )
+
+                self.container = new_container
+                client_storage["chat_card_container"] = new_container
+                self.rendered = True
+                self.displayed_message_ids.clear()
+
+                await self.load_messages_from_db(username)
+                await self.update_messages()
+                await self.scroll_to_bottom()
+
+                if not self.messages_container or not self.message_input:
+                    raise RuntimeError(get_text(self.language, "chat_ui_not_ready"))
+
+                logger.info(f"{username}: Render giao diện chat thành công")
+                return True
+
+        except Exception as e:
+            logger.error(f"{username}: Lỗi render: {str(e)}", exc_info=True)
+            ui.notify(get_text(self.language, "chat_ui_load_error"), type="negative")
+            if new_container:
+                try:
+                    new_container.delete()
+                except Exception as e:
+                    logger.warning(f"{username}: Lỗi khi xóa container mới: {str(e)}")
+            self.rendered = False
+            return False
+            
     
     async def handle_send(self):
         username = self.client_state.get("username", "")
@@ -822,15 +973,48 @@ class ChatComponent:
                     matches = await self.fuzzy_match_question(
                         "qa_data", message, username, limit=1, threshold=self.qa_threshold
                     )
-                    response = matches[0]["answer"] if matches else get_text(self.language, "no_qa_answer")
+                    response = (
+                        matches[0]["answer"]
+                        if matches
+                        else get_text(self.language, "no_qa_answer")
+                    )
                     if not matches:
                         ui.notify(get_text(self.language, "no_qa_answer"), type="negative")
 
                 elif chat_mode == "Hybrid":
+                    # Tìm top 3 QA khớp nhất
                     matches = await self.fuzzy_match_question(
-                        "qa_data", message, username, limit=1, threshold=self.qa_threshold
+                        "qa_data", message, username, limit=3, threshold=self.qa_threshold
                     )
-                    qa_context = matches[0]["answer"] if matches else "No QA Context."
+                    logger.info(f"{username}: Hybrid mode - Found {len(matches)} QA matches")
+
+                    if not matches:
+                        qa_context = "No relevant QA found."
+                        ui.notify(get_text(self.language, "no_qa_answer"), type="warning")
+                    else:
+                        # Ước lượng score nếu FTS không có
+                        for i, match in enumerate(matches):
+                            if "score" not in match:
+                                match["score"] = 90 - i * 10
+
+                        qa_context_parts = []
+                        for i, match in enumerate(matches):
+                            truncated_answer = (
+                                match["answer"][:500]
+                                + ("..." if len(match["answer"]) > 500 else "")
+                            )
+                            qa_context_parts.append(
+                                f"QA {i+1} (score: {match['score']/100:.2f}, "
+                                f"category: {match.get('category', 'N/A')}): {truncated_answer}"
+                            )
+                        qa_context = "\n".join(qa_context_parts)
+
+                        if len(matches) < 3:
+                            ui.notify(
+                                f"Chỉ tìm thấy {len(matches)} QA khớp, sử dụng context hạn chế",
+                                type="warning",
+                            )
+
                     recent_history = (
                         "\n".join(
                             f"[{msg['role']}]: {msg['content']}"
@@ -844,25 +1028,25 @@ class ChatComponent:
                         if self.messages
                         else "No relevant chat history."
                     )
+
                     hybrid_prompt = (
-                        f"Question: {message}\n"
-                        f"QA Context: {qa_context}\n"
-                        f"Recent chat history:\n{recent_history}\n"
-                        f"If QA Context is available, use it as the primary source to answer, "
-                        f"phrasing naturally and preserving key details (numbers, dates, proper nouns). "
-                        f"If no QA Context, use chat history, prioritizing previous answers with "
-                        f"specific details. If nothing relevant, answer with general knowledge "
-                        f"or ask for more info."
+                        f"Câu hỏi: {message}\n"
+                        f"Ngữ cảnh QA liên quan (đánh giá câu trả lời có phù hợp với ý định/các thực thể trong câu hỏi không; điểm số chỉ là gợi ý tương đồng):\n{qa_context}\n"
+                        f"Lịch sử chat:\n{recent_history}\n"
+                        f"Hướng dẫn: dựa vào QA để trả lời, chính xác."
+                        f"Nếu không có QA chính xác thì sử dụng lịch sử chat/kiến thức tự nhiên, tránh phủ định cứng trừ khi không có gì. Ngắn gọn và hữu ích."
                     )
-                    result = await self.call_grok_api(hybrid_prompt, "chat", username)
+
+                    result = await self.call_grok_api(hybrid_prompt, "", username)
                     response = result.get(
                         "response",
-                        get_text(self.language, "no_qa_answer")
-                        if qa_context == "No QA Context."
-                        else qa_context,
+                        qa_context.split("\n")[0]
+                        if matches
+                        else get_text(self.language, "no_qa_answer"),
                     )
                     if "error" in result:
-                        ui.notify(get_text(self.language, "no_qa_answer"), type="negative")
+                        ui.notify(get_text(self.language, "grok_api_error"), type="negative")
+                        response = get_text(self.language, "no_qa_answer")
 
                 else:  # Grok
                     recent_history = (
@@ -884,7 +1068,10 @@ class ChatComponent:
                         f"Answer based on chat history if possible, or general knowledge if not."
                     )
                     result = await self.call_grok_api(grok_prompt, "chat", username)
-                    response = result.get("response", f"❌ {result.get('error', 'Unknown error')}")
+                    response = result.get(
+                        "response",
+                        f"Error: {result.get('error', 'Unknown error')}",
+                    )
 
                 # Save assistant message
                 result = await self.core.add_chat_message(
@@ -896,7 +1083,6 @@ class ChatComponent:
                 )
                 assistant_message_id = result["message_id"]
 
-                # Placeholder for typing effect
                 self.messages.append({
                     "id": assistant_message_id,
                     "content": "",
@@ -906,12 +1092,10 @@ class ChatComponent:
                 })
                 await self.update_messages()
 
-                # Save ChatComponent to global cache
-                from app import CHAT_COMPONENTS  # Import trước khi sử dụng
+                from app import CHAT_COMPONENTS
                 CHAT_COMPONENTS[self.client_id] = self
                 app.storage.client[self.client_id] = {"client_id": self.client_id}
 
-                # JavaScript for typing effect
                 escaped_response = response.replace("'", "\\'").replace("\n", "\\n")
                 js_code = f"""
                     (function() {{
@@ -962,7 +1146,6 @@ class ChatComponent:
                         f"{username}: JavaScript timeout for message_id={assistant_message_id}: {str(e)}"
                     )
 
-                # Fallback: Update manually if JS not executed
                 async def fallback_update():
                     await asyncio.sleep(30)
                     for msg in self.messages:
@@ -1016,144 +1199,7 @@ class ChatComponent:
                         logger.debug(f"{username}: Skipped deleting progress bar (not found)")
                 ui.update()
                 await self.scroll_to_bottom()
-    
-    async def render(self):
-        username = self.client_state.get("username", "")
-        self.client_id = getattr(context.client, 'id', None)
-        if (not self.client_id
-                or not self.client_state
-                or "session_token" not in self.client_state
-                or not validate_name(self.client_state["session_token"])):
-            logger.error(f"{username}: Phiên hoặc client_id không hợp lệ")
-            ui.notify(get_text(self.language, "invalid_session"), type="negative")
-            return False
-
-        try:
-            async with asyncio.timeout(30):
-                check_disk_space()
-                client_storage = app.storage.client.setdefault(self.client_id, {})
-                new_container = ui.element("div").classes(self.classes)
-
-                with new_container:
-                    ui.label(get_text(self.language, "chat_ai_label")).classes(
-                        "text-lg font-semibold mb-2"
-                    )
-                    self.messages_container = ui.scroll_area().classes(
-                        "flex-1 mb-2 h-[50vh] sm:h-[60vh]"
-                    )
-
-                    if Config.SHOW_MODEL_COMBOBOX:
-                        model_select = ui.select(
-                            Config.AVAILABLE_MODELS,
-                            label=get_text(self.language, "select_model_label"),
-                            value=self.client_state.get("model", Config.DEFAULT_MODEL)
-                        ).classes("w-full sm:w-1/4 mb-2").on(
-                            "update:modelValue",
-                            lambda e: self.on_model_change(e.args)
-                        )
-                    else:
-                        self.client_state["model"] = Config.DEFAULT_MODEL
-
-                    if Config.SHOW_MODE_COMBOBOX:
-                        mode_options = ["Grok", "QA", "Hybrid"]
-                        mode_select = ui.select(
-                            mode_options,
-                            label=get_text(self.language, "select_mode_label"),
-                            value=self.client_state.get("chat_mode", Config.DEFAULT_CHAT_MODE)
-                        ).classes("w-full sm:w-1/4 mb-2").on(
-                            "update:modelValue",
-                            lambda e: self.handle_mode_change(e.args, mode_options)
-                        )
-                    else:
-                        self.client_state["chat_mode"] = Config.DEFAULT_CHAT_MODE
-
-                    with ui.element("div").classes("w-full flex flex-col sm:flex-row gap-2"):
-                        self.message_input = ui.textarea(
-                            label=get_text(self.language, "message_input_label"),
-                            placeholder=get_text(
-                                self.language,
-                                self.placeholder,
-                                default="Enter your message..."
-                            )
-                        ).props("clearable").classes("flex-1").bind_enabled_from(
-                            self, "loading", backward=lambda x: not x
-                        ).on(
-                            "keydown.enter",
-                            lambda e: self.handle_send() if not e.args.get("repeat") else None
-                        )
-
-                        self.upload_input = ui.upload(
-                            label=get_text(self.language, "upload_file_label"),
-                            auto_upload=False,
-                            on_upload=lambda e: self.handle_upload(e)
-                        ).props(
-                            f'accept="{",".join(Config.CHAT_FILE_ALLOWED_FORMATS)}"'
-                        ).classes("w-full sm:w-auto").bind_enabled_from(
-                            self, "loading", backward=lambda x: not x
-                        )
-
-                        ui.button(
-                            get_text(self.language, "upload_button"),
-                            on_click=lambda: self.upload_input.run_method("upload")
-                        ).classes(
-                            "bg-blue-600 text-white hover:bg-blue-700 w-full sm:w-auto"
-                        ).bind_enabled_from(
-                            self, "loading", backward=lambda x: not x
-                        )
-
-                        ui.button(
-                            get_text(self.language, self.send_button_label),
-                            on_click=self.handle_send,
-                            icon="send"
-                        ).classes(
-                            "bg-blue-600 text-white w-full sm:w-auto"
-                        ).bind_enabled_from(
-                            self, "loading", backward=lambda x: not x
-                        )
-
-                        ui.button(
-                            get_text(self.language, "reset_button"),
-                            on_click=self.reset,
-                            icon="delete"
-                        ).classes("bg-red-600 text-white w-full sm:w-auto")
-
-                if self.container:
-                    if (hasattr(self.container, 'parent_slot')
-                            and self.container in self.container.parent_slot.children):
-                        self.container.clear()
-                        self.container.delete()
-                    else:
-                        logger.debug(
-                            f"{username}: Bỏ qua xóa container cũ vì không tồn tại trong danh sách children"
-                        )
-
-                self.container = new_container
-                client_storage["chat_card_container"] = new_container
-                self.rendered = True
-                self.displayed_message_ids.clear()  # Đặt lại danh sách ID khi render mới
-
-                await self.load_messages_from_db(username)
-                await self.update_messages()
-                await self.scroll_to_bottom()
-
-                if not self.messages_container or not self.message_input:
-                    raise RuntimeError(get_text(self.language, "chat_ui_not_ready"))
-
-                logger.info(f"{username}: Render giao diện chat thành công")
-                return True
-
-        except Exception as e:
-            logger.error(f"{username}: Lỗi render: {str(e)}", exc_info=True)
-            ui.notify(get_text(self.language, "chat_ui_load_error"), type="negative")
-            if new_container:
-                try:
-                    new_container.delete()
-                except Exception as e:
-                    logger.warning(f"{username}: Lỗi khi xóa container mới: {str(e)}")
-            self.rendered = False
-            return False
-            
-    
+                
     async def handle_upload(self, event):
         username = self.client_state.get("username", "")
         try:
