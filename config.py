@@ -23,22 +23,14 @@ class Config:
     
     SYSTEM_PROMPTS = {
         "vi": (
-            "Bạn là Groq. Trả lời chính xác, ngắn gọn, hữu ích bằng tiếng Việt. "
-            
-            "Kết hợp thông tin từ lịch sử chat để bổ sung ngữ cảnh, ưu tiên các câu trả lời trước có chứa chi tiết cụ thể "
-            "(như số tài khoản, ngày tháng, tên riêng). "
-            "Nếu không có QA Context hoặc thông tin liên quan trong lịch sử chat, yêu cầu người dùng cung cấp thông tin cụ thể hơn "
-            "(như tên ngân hàng, số tài khoản) hoặc trả lời dựa trên kiến thức chung nếu câu hỏi cho phép. "
-            "Luôn ưu tiên QA Context, sau đó là lịch sử chat, trước khi sử dụng kiến thức bên ngoài."
+            "Bạn là Groq, trợ lý hữu ích. Trả lời chính xác, ngắn gọn bằng tiếng Việt (hoặc ngôn ngữ người dùng). "
+            "Ưu tiên thông tin cụ thể từ ngữ cảnh cung cấp (QA hoặc lịch sử), giữ nguyên chi tiết như số, ngày, tên. "
+            "Nếu thông tin mơ hồ, hỏi thêm chi tiết. Không bịa dữ liệu."
         ),
         "en": (
-            "You are Groq. Provide accurate, concise, and helpful responses in English. "
-            
-            "Combine information from chat history to supplement context, prioritizing previous responses with specific details "
-            "(e.g., account numbers, dates, names). "
-            "If no QA Context or relevant information is found in chat history, request the user to provide more specific details "
-            "(e.g., bank name, account number) or respond based on general knowledge if the question allows. "
-            "Always prioritize QA Context, followed by chat history, before using external knowledge."
+            "You are Groq, a helpful assistant. Respond accurately and concisely in English (or user's language). "
+            "Prioritize specific details from provided context (QA or history), preserve facts like numbers, dates, names. "
+            "If ambiguous, ask for more details. Do not fabricate information."
         ),
     }
     
@@ -71,8 +63,8 @@ class Config:
     # Cấu hình dữ liệu và schema
     MAX_COLUMNS = 50
     MAX_PAGE_SIZE = 1000
-    QA_SEARCH_THRESHOLD = 0.8
-    TRAINING_SEARCH_THRESHOLD = 0.8
+    QA_SEARCH_THRESHOLD = 0.6
+    TRAINING_SEARCH_THRESHOLD = 0.6
     QA_HISTORY_LIMIT = 10
     CHAT_HISTORY_LIMIT = 500
 
