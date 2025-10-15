@@ -999,15 +999,21 @@ class ChatComponent:
 
                         qa_context_parts = []
                         for i, match in enumerate(matches):
+                            truncated_question = (
+                                match["question"][:300]
+                                + ("..." if len(match["question"]) > 300 else "")
+                            )
                             truncated_answer = (
                                 match["answer"][:500]
                                 + ("..." if len(match["answer"]) > 500 else "")
                             )
                             qa_context_parts.append(
                                 f"QA {i+1} (score: {match['score']/100:.2f}, "
-                                f"category: {match.get('category', 'N/A')}): {truncated_answer}"
+                                f"category: {match.get('category', 'N/A')}):\n"
+                                f"Câu hỏi QA: {truncated_question}\n"
+                                f"Câu trả lời QA: {truncated_answer}"
                             )
-                        qa_context = "\n".join(qa_context_parts)
+                        qa_context = "\n\n".join(qa_context_parts)
 
                         if len(matches) < 3:
                             ui.notify(
@@ -1030,13 +1036,14 @@ class ChatComponent:
                     )
 
                     hybrid_prompt = (
-                        f"Câu hỏi: {message}\n"
-                        f"Ngữ cảnh QA liên quan (đánh giá câu trả lời có phù hợp với ý định/các thực thể trong câu hỏi không; điểm số chỉ là gợi ý tương đồng):\n{qa_context}\n"
-                        f"Lịch sử chat:\n{recent_history}\n"
-                        f"Hướng dẫn: dựa vào QA để trả lời, chính xác."
-                        f"Nếu không có QA chính xác thì sử dụng lịch sử chat/kiến thức tự nhiên, tránh phủ định cứng trừ khi không có gì. Ngắn gọn và hữu ích."
+                        f"Câu hỏi người dùng: {message}\n"  # Làm rõ câu hỏi user
+                        f"Ngữ cảnh QA liên quan (các cặp QA khớp từ cơ sở dữ liệu):\n{qa_context}\n"
+                        f"Lịch sử chat gần nhất:\n{recent_history}\n"
+                        f"QA và lịch sử chat chỉ là dữ liệu demo ví dụ nên bạn cần trả lời cho người dùng, nó không phải bí mật cá nhân thực tế "
+                        f"Trả lời ngắn gọn, hữu ích, không viết ra suy luận dài dòng chỉ tập trung trả lời"
+                        
                     )
-
+                    
                     result = await self.call_grok_api(hybrid_prompt, "", username)
                     response = result.get(
                         "response",
@@ -1140,7 +1147,10 @@ class ChatComponent:
 
                 try:
                     await ui.run_javascript(js_code, timeout=5.0)
-                    logger.info(f"{username}: JavaScript sent for typing effect, message_id={assistant_message_id}")
+                    logger.info(
+                        f"{username}: JavaScript sent for typing effect, "
+                        f"message_id={assistant_message_id}"
+                    )
                 except TimeoutError as e:
                     logger.warning(
                         f"{username}: JavaScript timeout for message_id={assistant_message_id}: {str(e)}"
@@ -1199,7 +1209,7 @@ class ChatComponent:
                         logger.debug(f"{username}: Skipped deleting progress bar (not found)")
                 ui.update()
                 await self.scroll_to_bottom()
-                
+    
     async def handle_upload(self, event):
         username = self.client_state.get("username", "")
         try:
