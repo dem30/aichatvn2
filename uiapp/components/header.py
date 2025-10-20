@@ -399,6 +399,13 @@ class HeaderComponent:
                         await self.logout_button.render()
                         logger.debug(f"{self.username}: Đã render logout_button")
 
+                        with ui.card().classes("p-4 w-full"):
+                            ui.html(
+                                "Developed by AIChatVN Team. Support Zalo: <a href='https://zalo.me/0944121150' target='_blank'>0944121150</a>"
+                            ).classes("text-sm text-center text-gray-600")
+                            logger.debug(f"{self.username}: Đã render dòng chữ attribution tĩnh trong right_drawer")
+
+
                 if old_container:
                     old_container.clear()
                     old_container.delete()
