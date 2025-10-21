@@ -1,4 +1,3 @@
----
 
 ---
 title: aichatvn2
@@ -144,6 +143,23 @@ Nếu bạn thấy dự án hữu ích, hãy ủng hộ tác giả tại:
 
 Your support keeps this Vietnamese open-source AI project alive ❤️
 
+
+---
+
+⚖️ **Disclaimer | Từ chối trách nhiệm**
+
+This software is provided “AS IS”, without any warranty of any kind.  
+The author shall not be liable for any damages arising from the use or inability to use this software.
+
+Phần mềm được cung cấp “NGUYÊN TRẠNG”, không có bất kỳ bảo đảm nào.  
+Tác giả không chịu trách nhiệm cho mọi thiệt hại phát sinh do việc sử dụng hoặc không thể sử dụng phần mềm này.
+
+---
+
+🔒 **Copyright Notice**
+
+Do not remove, modify, or hide any original copyright or author information.  
+Không được gỡ bỏ, thay đổi hoặc ẩn thông tin bản quyền gốc.
 
 ---
 
