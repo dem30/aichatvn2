@@ -1,0 +1,49 @@
+BẢN QUYỀN © 2025 – THÁI QUANG VINH (dem30)  
+Địa chỉ: Số 10 Đường Núi Cô Tiên, Phường Bắc Nha Trang, Thành phố Khánh Hòa, Việt Nam  
+Email: another.vin1@gmail.com | thaiquangvinh@hotmail.com.vn  
+Zalo: 0944 121 150  
+
+---
+
+## 1. QUYỀN SỬ DỤNG
+
+Bạn được phép:
+- Tải xuống, sử dụng và chỉnh sửa mã nguồn này **cho mục đích cá nhân, học tập hoặc phi thương mại**.
+- Ghi rõ nguồn “Thái Quang Vinh (dem30)” khi chia sẻ lại hoặc tái xuất bản.
+
+---
+
+## 2. GIỚI HẠN SỬ DỤNG
+
+**NGHIÊM CẤM**:
+- Sử dụng, sao chép, phân phối hoặc bán mã nguồn này cho **mục đích thương mại** mà không có sự đồng ý bằng văn bản của tác giả.  
+- Gỡ bỏ, thay đổi hoặc ẩn đi thông tin bản quyền gốc.
+
+---
+
+## 3. SỬ DỤNG THƯƠNG MẠI
+
+Nếu bạn hoặc tổ chức của bạn sử dụng mã nguồn này trong sản phẩm hoặc dịch vụ **có thu lợi**, bạn **phải**:
+- Liên hệ với tác giả qua GitHub [@dem30](https://github.com/dem30),  
+  hoặc qua email/Zalo được nêu ở trên;  
+- Thỏa thuận **tỷ lệ chia hoa hồng hợp lý** trước khi triển khai thương mại.
+
+Nếu không thực hiện, tác giả có quyền yêu cầu **gỡ bỏ sản phẩm**, hoặc **yêu cầu bồi hoàn lợi nhuận** tương ứng phần đóng góp của mã nguồn này.
+
+---
+
+## 4. TỪ CHỐI TRÁCH NHIỆM
+
+Phần mềm được cung cấp “NGUYÊN TRẠNG” (AS IS), **không có bất kỳ bảo đảm nào**.  
+Tác giả không chịu trách nhiệm đối với mọi thiệt hại phát sinh do việc sử dụng hoặc không thể sử dụng phần mềm này.
+
+---
+
+## 5. TÀI TRỢ
+
+Nếu bạn thấy mã nguồn hữu ích, vui lòng ủng hộ tác giả tại:  
+👉 [https://github.com/sponsors/dem30](https://github.com/sponsors/dem30)
+
+---
+
+© 2025 – Thái Quang Vinh (dem30)
